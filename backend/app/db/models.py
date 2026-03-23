@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import JSON, DateTime, Index, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -52,6 +52,50 @@ class DiagnosisRecord(Base):
     tenant_id: Mapped[str] = mapped_column(String(256), index=True)
     environment: Mapped[str] = mapped_column(String(32), index=True, insert_default="prod")
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        insert_default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class TraceStepRecord(Base):
+    """Step-level index for fast cross-trace queries."""
+
+    __tablename__ = "trace_steps"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "environment",
+            "trace_id",
+            "step_id",
+            name="uq_trace_steps_tenant_env_trace_step",
+        ),
+        Index("ix_trace_steps_tenant_env_trace", "tenant_id", "environment", "trace_id"),
+        Index(
+            "ix_trace_steps_failures_window",
+            "tenant_id",
+            "environment",
+            "step_type",
+            "has_error",
+            "trace_started_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    trace_id: Mapped[str] = mapped_column(String(36), index=True)
+    tenant_id: Mapped[str] = mapped_column(String(256), index=True)
+    environment: Mapped[str] = mapped_column(String(32), index=True, insert_default="prod")
+    step_id: Mapped[str] = mapped_column(String(256))
+    step_type: Mapped[str] = mapped_column(String(64), index=True)
+    parent_step_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    has_error: Mapped[bool] = mapped_column(Boolean, index=True, insert_default=False)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    trace_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    input_payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    output_payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    metadata_payload: Mapped[dict[str, Any]] = mapped_column("metadata", JSON)
+    span_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    traceparent: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         insert_default=lambda: datetime.now(timezone.utc),

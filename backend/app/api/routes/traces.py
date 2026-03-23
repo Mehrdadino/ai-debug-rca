@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_tenant_id
 from app.config import settings
 from app.db.engine import get_session
-from app.db.models import TraceRecord
+from app.db.models import TraceRecord, TraceStepRecord
 from app.models.diagnosis import Diagnosis
 from app.models.trace import Trace, TraceEnvironment, TraceStatus
 from app.repositories.diagnosis import get_diagnosis_for_trace
@@ -21,6 +21,7 @@ from app.repositories.traces import (
     TraceConflictError,
     get_trace_by_id,
     insert_trace,
+    list_steps,
     list_traces,
     trace_exists,
 )
@@ -125,6 +126,35 @@ class TraceListResponse(BaseModel):
     limit: int
     offset: int
     has_more: bool
+
+
+class StepSummary(BaseModel):
+    trace_id: UUID
+    step_id: str
+    step_type: str
+    tenant_id: str
+    environment: TraceEnvironment
+    trace_started_at: str
+    error: Optional[str] = None
+
+
+class StepListResponse(BaseModel):
+    items: list[StepSummary]
+    limit: int
+    offset: int
+    has_more: bool
+
+
+def _row_to_step_summary(row: TraceStepRecord) -> StepSummary:
+    return StepSummary(
+        trace_id=UUID(row.trace_id),
+        step_id=row.step_id,
+        step_type=row.step_type,
+        tenant_id=row.tenant_id,
+        environment=TraceEnvironment(row.environment),
+        trace_started_at=row.trace_started_at.isoformat(),
+        error=row.error,
+    )
 
 
 def _row_to_summary(row: TraceRecord) -> TraceSummary:
@@ -251,6 +281,80 @@ async def get_trace_diagnosis(
             detail="diagnosis not found for this trace",
         )
     return Diagnosis.model_validate(row.payload)
+
+
+@router.get("/steps", response_model=StepListResponse)
+async def list_steps_endpoint(
+    tenant_id: str = Depends(get_tenant_id),
+    session: AsyncSession = Depends(db_session),
+    has_error: Optional[bool] = Query(
+        None,
+        description="Optional error filter: true for failures, false for successful steps.",
+    ),
+    step_type: Optional[str] = Query(
+        None,
+        min_length=1,
+        max_length=64,
+        description="Optional step type filter (e.g. tool_call).",
+    ),
+    days: int = Query(
+        7,
+        ge=1,
+        le=365,
+        description="Lookback window in days from now (UTC).",
+    ),
+    environment: Optional[TraceEnvironment] = Query(
+        None,
+        description="Optional environment filter.",
+    ),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> StepListResponse:
+    now = datetime.now(timezone.utc)
+    started_at_from = now - timedelta(days=days)
+    normalized_step_type = step_type.strip().lower() if step_type else None
+    rows = await list_steps(
+        session,
+        tenant_id,
+        has_error=has_error,
+        step_type=normalized_step_type,
+        environment=environment.value if environment else None,
+        started_at_from=started_at_from,
+        started_at_to=now,
+        limit=limit,
+        offset=offset,
+    )
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    return StepListResponse(
+        items=[_row_to_step_summary(r) for r in rows],
+        limit=limit,
+        offset=offset,
+        has_more=has_more,
+    )
+
+
+@router.get("/steps/failures", response_model=StepListResponse)
+async def list_step_failures_compat(
+    tenant_id: str = Depends(get_tenant_id),
+    session: AsyncSession = Depends(db_session),
+    step_type: Optional[str] = Query(None, min_length=1, max_length=64),
+    days: int = Query(7, ge=1, le=365),
+    environment: Optional[TraceEnvironment] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> StepListResponse:
+    # Backward-compatible alias for previous endpoint shape.
+    return await list_steps_endpoint(
+        tenant_id=tenant_id,
+        session=session,
+        has_error=True,
+        step_type=step_type,
+        days=days,
+        environment=environment,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post(

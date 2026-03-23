@@ -40,7 +40,7 @@ class CorrelationIds(BaseModel):
 
 class Step(BaseModel):
     step_id: str = Field(..., min_length=1, max_length=256)
-    type: StepType
+    type: str = Field(..., min_length=1, max_length=64)
     parent_step_id: Optional[str] = None
     input: dict[str, Any] = Field(default_factory=dict)
     output: dict[str, Any] = Field(default_factory=dict)
@@ -48,6 +48,12 @@ class Step(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     span_id: Optional[str] = None
     traceparent: Optional[str] = None
+
+    @field_validator("type", mode="after")
+    @classmethod
+    def normalize_type(cls, v: str) -> str:
+        # Keep step_type open-ended for forward compatibility across clients.
+        return v.strip().lower()
 
 
 class Edge(BaseModel):

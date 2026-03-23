@@ -1,6 +1,6 @@
 # Backend (Python)
 
-Phase **A/B + diagnosis (v0.4)**: canonical traces, **async ingest with DB-backed durable backlog** (`ingest_jobs` table), **list traces**, **rule-based diagnosis**, SQLite for local dev.
+Phase **A/B + diagnosis (v0.4)**: canonical traces, **async ingest with DB-backed durable backlog** (`ingest_jobs` table), **list traces**, **rule-based diagnosis**. PostgreSQL is the default target for staging/prod; SQLite remains useful for fast local tests.
 
 ## Requirements
 
@@ -14,7 +14,7 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -U pip
-pip install "fastapi>=0.115" "uvicorn[standard]>=0.32" "pydantic>=2.10" "pydantic-settings>=2.6" "sqlalchemy[asyncio]>=2.0.36" "aiosqlite>=0.20"
+pip install "fastapi>=0.115" "uvicorn[standard]>=0.32" "pydantic>=2.10" "pydantic-settings>=2.6" "sqlalchemy[asyncio]>=2.0.36" "aiosqlite>=0.20" "asyncpg>=0.30" "psycopg[binary]>=3.2" "alembic>=1.14"
 pip install "httpx>=0.27" "pytest>=8.3" "pytest-asyncio>=0.24"  # dev
 ```
 
@@ -30,13 +30,24 @@ mkdir -p data
 python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+### Run with PostgreSQL (recommended for staging/prod)
+
+```bash
+cd backend
+docker compose -f docker-compose.postgres.yml up -d
+export PYTHONPATH=.
+export RCA_DATABASE_URL="postgresql+asyncpg://rca:rca@127.0.0.1:5433/rca"
+python3 -m alembic upgrade head
+python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
 Use **`python3 -m uvicorn`** so the same interpreter that has FastAPI/uvicorn is used. The bare `uvicorn` command only works if that interpreter’s `bin` directory is on your `PATH` (e.g. after `source .venv/bin/activate`).
 
 ### Environment
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `RCA_DATABASE_URL` | `sqlite+aiosqlite:///./data/app.db` | Async SQLAlchemy URL |
+| `RCA_DATABASE_URL` | `sqlite+aiosqlite:///./data/app.db` | Async SQLAlchemy URL. For Postgres use `postgresql+asyncpg://user:pass@host:5433/dbname` |
 | `RCA_INGEST_SYNC` | `0` (false) | If `1` / `true`, `POST /v1/traces` writes in the request and returns **201**. If false, traces are first persisted to the `ingest_jobs` backlog and API returns **202**; worker drains backlog to `traces`. |
 | `RCA_INGEST_QUEUE_MAXSIZE` | `10000` | Max backlog row count (`ingest_jobs`) before API returns **503** |
 | `RCA_INGEST_BATCH_MAX_SIZE` | `100` | Max items accepted by `POST /v1/traces/batch` |
@@ -54,6 +65,8 @@ For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace
   - SDK-friendly item fields: `status`, `http_status`, optional `error_code`, optional `detail`
 - Rate/quota failures return **429** with `Retry-After` and a retry hint in `detail`.
 - List: `GET /v1/traces?limit=&offset=&status=&environment=&started_at_from=&started_at_to=` — optional filters; time bounds are **inclusive** on **`started_at`** (run time), ISO-8601  
+- Steps query: `GET /v1/traces/steps?step_type=&has_error=&days=&environment=&limit=&offset=` — fast step-index query (supports failures/success/all; default `days=7`)
+- Backward-compatible alias: `GET /v1/traces/steps/failures?...` (equivalent to `has_error=true`)
 - Fetch: `GET /v1/traces/{trace_id}?environment=prod|staging|dev|critical` (defaults to `prod`)  
 - Diagnosis (rules v1): `GET /v1/traces/{trace_id}/diagnosis?environment=...` (defaults to `prod`) — primary hypothesis, confidence, evidence
 - Admin limits (when `RCA_ADMIN_TOKEN` is set):
@@ -68,7 +81,15 @@ export PYTHONPATH=.
 pytest -v
 ```
 
-After **SQLAlchemy model / constraint changes**, remove the local DB file once so `create_all` builds fresh tables (e.g. `rm -f data/pytest.db data/app.db` from `backend/`).
+## Migrations (Alembic)
+
+The app runs `alembic upgrade head` during startup (`init_db`), so schema is migrated before serving.
+
+```bash
+cd backend
+export PYTHONPATH=.
+python3 -m alembic upgrade head
+```
 
 ## Data model notes
 
@@ -80,6 +101,5 @@ After **SQLAlchemy model / constraint changes**, remove the local DB file once s
 ## Next implementation steps (see `plan.md` §19)
 
 1. **PostgreSQL** + object storage when moving off single-file SQLite for staging/prod.  
-2. **Alembic** (or equivalent) for schema evolution.  
-3. **Distributed rate-limiter backend** (Redis/Postgres counters) for multi-instance API nodes.  
-4. **Python SDK**, **Web UI**, **LLM explainer** — as in `plan.md`.
+2. **Distributed rate-limiter backend** (Redis/Postgres counters) for multi-instance API nodes.  
+3. **Python SDK**, **Web UI**, **LLM explainer** — as in `plan.md`.

@@ -589,6 +589,7 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 - **Composite uniqueness:** **`UNIQUE (tenant_id, environment, trace_id)`** on **`traces`**, **`diagnoses`**, **`ingest_jobs`** (named constraints `uq_traces_tenant_env_trace`, `uq_diagnoses_tenant_env_trace`, `uq_ingest_jobs_tenant_env_trace`). The same `trace_id` UUID may exist for **different** tenants or environments; duplicates **within** the same tenant+environment return **409**.
 - **Rate limits & quotas (initial):** per-tenant ingest request-rate and daily trace quota with **429 + Retry-After** on `POST /v1/traces` and `/v1/traces/batch` (current implementation is in-process; distributed limiter backend remains a scale task).
 - **Tenant limit management (initial):** admin-only APIs (`/v1/admin/tenants/{tenant_id}/limits`) persist per-tenant policies in `tenant_limits`; ingest enforcement resolves tenant override first, then global defaults.
+- **Migrations (initial):** Alembic is wired with a baseline revision; startup runs `upgrade head` instead of relying only on `create_all`.
 
 ### Near-term (product + trust)
 
@@ -599,25 +600,24 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 2. **PostgreSQL** — migrate from SQLite for dev/staging/prod; keep SQLite for fast local tests.
 3. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path.
 4. **External queue (optional)** — SQS / Redis / Pub/Sub when multi-worker or cross-region; DB backlog can remain dev fallback.
-5. **Migrations** — Alembic (or equivalent) instead of only `create_all` (today: `create_all` does not alter existing SQLite files; delete local `data/*.db` or apply a migration after schema changes).
-6. **Distributed rate limits / quotas** — shared backend (Redis or DB counters) so 429 behavior stays correct across multiple API instances.
+5. **Distributed rate limits / quotas** — shared backend (Redis or DB counters) so 429 behavior stays correct across multiple API instances.
 
 ### Product surface
 
-7. **Web UI** — React + trace graph + timeline + failure-first list; consumes public APIs only.
-8. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
-9. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
+6. **Web UI** — React + trace graph + timeline + failure-first list; consumes public APIs only.
+7. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
+8. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
 
 ### Ops & enterprise
 
-10. **Observability** — OpenTelemetry on our own API/workers.
-11. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
-12. **Webhooks / export** — after hypothesis quality is credible.
+9. **Observability** — OpenTelemetry on our own API/workers.
+10. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
+11. **Webhooks / export** — after hypothesis quality is credible.
 
 ### GTM
 
-13. **Design partner brief** + **90-day TTPC** measurement loop.
-14. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
+12. **Design partner brief** + **90-day TTPC** measurement loop.
+13. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
 
 ---
 

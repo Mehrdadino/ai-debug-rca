@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import DiagnosisRecord, TraceRecord
+from app.db.models import DiagnosisRecord, TraceRecord, TraceStepRecord
 from app.models.trace import Trace
 from app.services.rules_engine import evaluate_trace
 
@@ -38,6 +38,25 @@ async def insert_trace(session: AsyncSession, trace: Trace) -> TraceRecord:
             payload=diagnosis.model_dump(mode="json"),
         )
     )
+    for step in trace.steps:
+        session.add(
+            TraceStepRecord(
+                trace_id=str(trace.trace_id),
+                tenant_id=trace.tenant_id,
+                environment=trace.environment.value,
+                step_id=step.step_id,
+                step_type=step.type,
+                parent_step_id=step.parent_step_id,
+                has_error=step.error is not None,
+                error=step.error,
+                trace_started_at=trace.started_at,
+                input_payload=step.input,
+                output_payload=step.output,
+                metadata_payload=step.metadata,
+                span_id=step.span_id,
+                traceparent=step.traceparent,
+            )
+        )
     try:
         await session.commit()
     except IntegrityError as e:
@@ -103,5 +122,33 @@ async def list_traces(
     if started_at_to is not None:
         q = q.where(TraceRecord.started_at <= started_at_to)
     q = q.order_by(TraceRecord.started_at.desc()).offset(offset).limit(limit + 1)
+    result = await session.execute(q)
+    return list(result.scalars().all())
+
+
+async def list_steps(
+    session: AsyncSession,
+    tenant_id: str,
+    *,
+    has_error: Optional[bool] = None,
+    step_type: Optional[str] = None,
+    environment: Optional[str] = None,
+    started_at_from: Optional[datetime] = None,
+    started_at_to: Optional[datetime] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[TraceStepRecord]:
+    q = select(TraceStepRecord).where(TraceStepRecord.tenant_id == tenant_id)
+    if has_error is not None:
+        q = q.where(TraceStepRecord.has_error.is_(has_error))
+    if step_type is not None:
+        q = q.where(TraceStepRecord.step_type == step_type)
+    if environment is not None:
+        q = q.where(TraceStepRecord.environment == environment)
+    if started_at_from is not None:
+        q = q.where(TraceStepRecord.trace_started_at >= started_at_from)
+    if started_at_to is not None:
+        q = q.where(TraceStepRecord.trace_started_at <= started_at_to)
+    q = q.order_by(TraceStepRecord.trace_started_at.desc()).offset(offset).limit(limit + 1)
     result = await session.execute(q)
     return list(result.scalars().all())

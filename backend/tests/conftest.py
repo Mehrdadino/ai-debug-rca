@@ -29,11 +29,18 @@ def _truncate_traces(client: TestClient) -> None:
         from sqlalchemy import delete
 
         from app.db.engine import get_session
-        from app.db.models import DiagnosisRecord, IngestJobRecord, TenantLimitRecord, TraceRecord
+        from app.db.models import (
+            DiagnosisRecord,
+            IngestJobRecord,
+            TenantLimitRecord,
+            TraceRecord,
+            TraceStepRecord,
+        )
 
         async with get_session() as session:
             await session.execute(delete(TenantLimitRecord))
             await session.execute(delete(IngestJobRecord))
+            await session.execute(delete(TraceStepRecord))
             await session.execute(delete(DiagnosisRecord))
             await session.execute(delete(TraceRecord))
             await session.commit()

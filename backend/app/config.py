@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RCA_", env_file=".env", extra="ignore")
 
     database_url: str = "sqlite+aiosqlite:///./data/app.db"
-    """Async SQLAlchemy URL. Default: local SQLite file under ./data/"""
+    """Async SQLAlchemy URL. SQLite is default for local/dev; Postgres is recommended for staging/prod."""
 
     ingest_sync: bool = False
     """If True, write traces in the request handler (201). If False, enqueue and return 202."""

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 
 
 def test_health(client: TestClient) -> None:
@@ -161,3 +163,52 @@ def test_validation_duplicate_step_ids(client: TestClient) -> None:
     }
     r = client.post("/v1/traces", json=body, headers={"X-Tenant-ID": "org_demo"})
     assert r.status_code == 422
+
+
+def test_ingest_persists_trace_steps_index(client: TestClient) -> None:
+    tid = uuid.uuid4()
+    body = {
+        "schema_version": "1.0",
+        "trace_id": str(tid),
+        "tenant_id": "org_demo",
+        "started_at": "2025-01-15T10:00:00Z",
+        "status": "error",
+        "steps": [
+            {
+                "step_id": "s1",
+                "type": "retrieval",
+                "input": {"q": "hello"},
+                "output": {"chunks": []},
+                "error": None,
+                "metadata": {},
+            },
+            {
+                "step_id": "s2",
+                "type": "tool_call",
+                "parent_step_id": "s1",
+                "input": {"tool": "search"},
+                "output": {},
+                "error": "timeout",
+                "metadata": {"latency_ms": 1200},
+            },
+        ],
+        "edges": [{"from_step_id": "s1", "to_step_id": "s2"}],
+    }
+    h = {"X-Tenant-ID": "org_demo"}
+    r = client.post("/v1/traces", json=body, headers=h)
+    assert r.status_code == 201
+
+    async def count_steps() -> int:
+        from app.db.engine import get_session
+        from app.db.models import TraceStepRecord
+
+        async with get_session() as session:
+            q = select(func.count()).select_from(TraceStepRecord).where(
+                TraceStepRecord.trace_id == str(tid),
+                TraceStepRecord.tenant_id == "org_demo",
+                TraceStepRecord.environment == "prod",
+            )
+            result = await session.execute(q)
+            return int(result.scalar_one())
+
+    assert asyncio.run(count_steps()) == 2

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 from app.models.diagnosis import Diagnosis, EvidenceItem
-from app.models.trace import StepType, Trace, TraceStatus
+from app.models.trace import Trace, TraceStatus
 
 # Higher = more severe for ranking primary hypothesis.
 RULE_WEIGHTS: dict[str, int] = {
@@ -92,7 +92,7 @@ def _collect_evidence(trace: Trace) -> List[Tuple[str, int, EvidenceItem]]:
                 )
             )
 
-        if step.type == StepType.RETRIEVAL and _retrieval_empty(step.output):
+        if step.type == "retrieval" and _retrieval_empty(step.output):
             out.append(
                 (
                     "empty_retrieval",
@@ -105,7 +105,7 @@ def _collect_evidence(trace: Trace) -> List[Tuple[str, int, EvidenceItem]]:
                 )
             )
 
-        if step.type == StepType.TOOL_CALL and _tool_output_empty(step.output):
+        if step.type == "tool_call" and _tool_output_empty(step.output):
             out.append(
                 (
                     "empty_tool_output",
@@ -118,7 +118,7 @@ def _collect_evidence(trace: Trace) -> List[Tuple[str, int, EvidenceItem]]:
                 )
             )
 
-        if step.type == StepType.LLM_CALL:
+        if step.type == "llm_call":
             lat = _latency_ms(step.metadata)
             if lat is not None and lat > HIGH_LATENCY_MS:
                 out.append(
