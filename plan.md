@@ -599,8 +599,8 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 
 2. **PostgreSQL** — migrate from SQLite for dev/staging/prod; keep SQLite for fast local tests.
 3. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path.
-4. **External queue (optional)** — SQS / Redis / Pub/Sub when multi-worker or cross-region; DB backlog can remain dev fallback.
-5. **Distributed rate limits / quotas** — shared backend (Redis or DB counters) so 429 behavior stays correct across multiple API instances.
+4. **Distributed ingest queue + workers** — move background ingest from DB-backed polling to a distributed queue/consumer model (SQS / Redis Streams / Pub/Sub) for multi-instance safety, retry/DLQ semantics, and cross-region scale; keep DB backlog as local/dev fallback only.
+5. **Distributed rate limits / quotas (Redis)** — use Redis as the shared backend for rate limits and daily quotas so 429 behavior stays correct across multiple API instances.
 
 ### Product surface
 
