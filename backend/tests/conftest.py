@@ -1,0 +1,36 @@
+"""Pytest: DB URL before imports; FastAPI TestClient + truncate between tests."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+
+os.environ.setdefault("RCA_DATABASE_URL", "sqlite+aiosqlite:///./data/pytest.db")
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.main import app
+
+
+@pytest.fixture
+def client() -> TestClient:
+    with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture(autouse=True)
+def _truncate_traces(client: TestClient) -> None:
+    """Depends on client so lifespan + tables exist before DELETE."""
+
+    async def truncate() -> None:
+        from sqlalchemy import delete
+
+        from app.db.engine import get_session
+        from app.db.models import TraceRecord
+
+        async with get_session() as session:
+            await session.execute(delete(TraceRecord))
+            await session.commit()
+
+    asyncio.run(truncate())
