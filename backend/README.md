@@ -1,6 +1,6 @@
 # Backend (Python)
 
-Phase **A/B (continued)**: canonical trace schema (Pydantic), **async ingest queue** (in-process worker; swap for SQS/Redis later), **list traces** with pagination/filters, SQLite for local dev (Postgres in production later).
+Phase **A/B + diagnosis (v0.3)**: canonical traces, **async ingest queue** (in-process), **list traces**, **rule-based diagnosis** (stored with each trace; `GET .../diagnosis`), SQLite for local dev.
 
 ## Requirements
 
@@ -45,7 +45,8 @@ For local curl testing of the async path, use `export RCA_INGEST_SYNC=0` (or uns
 - OpenAPI: http://127.0.0.1:8000/docs  
 - Ingest: `POST /v1/traces` with header `X-Tenant-ID` matching `tenant_id` in the JSON body (**201** if sync ingest, **202** if queued)  
 - List: `GET /v1/traces?limit=&offset=&status=` with `X-Tenant-ID`  
-- Fetch: `GET /v1/traces/{trace_id}` with the same `X-Tenant-ID`
+- Fetch: `GET /v1/traces/{trace_id}` with the same `X-Tenant-ID`  
+- Diagnosis (rules v1): `GET /v1/traces/{trace_id}/diagnosis` — primary hypothesis, confidence, evidence (written when the trace is stored)
 
 ## Tests
 
@@ -57,7 +58,7 @@ pytest -v
 
 ## Next implementation steps (see `plan.md`)
 
-1. **External queue** (SQS / Redis) + multiple workers; keep in-proc queue as dev default.  
+1. **Durable queue** (SQS / Redis) before returning 202; keep in-proc for dev.  
 2. **Postgres** + object storage for blobs; keep SQLite for tests.  
 3. **API keys / auth** beyond `X-Tenant-ID`.  
-4. **Diagnosis engine** + `DiagnosisRecord` storage.
+4. **LLM explainer** (optional) over structured `Diagnosis` + more rules / tunable thresholds.

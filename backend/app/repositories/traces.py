@@ -7,8 +7,9 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import TraceRecord
+from app.db.models import DiagnosisRecord, TraceRecord
 from app.models.trace import Trace
+from app.services.rules_engine import evaluate_trace
 
 
 class TraceConflictError(Exception):
@@ -26,6 +27,14 @@ async def insert_trace(session: AsyncSession, trace: Trace) -> TraceRecord:
         payload=payload,
     )
     session.add(row)
+    diagnosis = evaluate_trace(trace)
+    session.add(
+        DiagnosisRecord(
+            trace_id=str(trace.trace_id),
+            tenant_id=trace.tenant_id,
+            payload=diagnosis.model_dump(mode="json"),
+        )
+    )
     try:
         await session.commit()
     except IntegrityError as e:

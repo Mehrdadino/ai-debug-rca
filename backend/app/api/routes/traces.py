@@ -11,7 +11,9 @@ from app.api.deps import require_tenant_id
 from app.config import settings
 from app.db.engine import get_session
 from app.db.models import TraceRecord
+from app.models.diagnosis import Diagnosis
 from app.models.trace import Trace, TraceStatus
+from app.repositories.diagnosis import get_diagnosis_for_trace
 from app.repositories.traces import (
     TraceConflictError,
     get_trace_by_id,
@@ -88,6 +90,21 @@ async def list_traces_endpoint(
         offset=offset,
         has_more=has_more,
     )
+
+
+@router.get("/{trace_id}/diagnosis", response_model=Diagnosis)
+async def get_trace_diagnosis(
+    trace_id: UUID,
+    tenant_id: str = Depends(require_tenant_id),
+    session: AsyncSession = Depends(db_session),
+) -> Diagnosis:
+    row = await get_diagnosis_for_trace(session, tenant_id, trace_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="diagnosis not found for this trace",
+        )
+    return Diagnosis.model_validate(row.payload)
 
 
 @router.post(

@@ -1,3 +1,4 @@
+from app.models.diagnosis import Diagnosis, EvidenceItem
 from app.models.trace import (
     CorrelationIds,
     Edge,
@@ -9,7 +10,9 @@ from app.models.trace import (
 
 __all__ = [
     "CorrelationIds",
+    "Diagnosis",
     "Edge",
+    "EvidenceItem",
     "Step",
     "StepType",
     "Trace",
