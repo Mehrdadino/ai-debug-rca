@@ -1,6 +1,6 @@
 # Example scripts (HTTP)
 
-These bash scripts call the backend with **`curl`**. The only **POST** endpoint right now is **`POST /v1/traces`**, so each file is a different example payload (minimal, multi-step RAG, error for diagnosis, etc.).
+These bash scripts call the backend with **`curl`**. They cover both **single ingest** (`POST /v1/traces`) and **batch ingest** (`POST /v1/traces/batch`).
 
 ## Prerequisites
 
@@ -30,6 +30,7 @@ export TENANT=my_org
 | `post_trace_rag_multi_step.sh` | Retrieval + LLM steps (happy path). |
 | `post_trace_diagnosis_step_error.sh` | Step error → should surface `step_error` in diagnosis. |
 | `post_trace_diagnosis_empty_retrieval.sh` | Empty retrieval chunks → `empty_retrieval` rule. |
+| `post_traces_batch.sh` | Posts 3 traces in one request to `/v1/traces/batch`. |
 
 After a successful POST, each script prints the **`trace_id`** and example **`curl`** lines to fetch the trace and diagnosis.
 

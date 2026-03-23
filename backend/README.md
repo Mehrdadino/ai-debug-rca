@@ -39,11 +39,15 @@ Use **`python3 -m uvicorn`** so the same interpreter that has FastAPI/uvicorn is
 | `RCA_DATABASE_URL` | `sqlite+aiosqlite:///./data/app.db` | Async SQLAlchemy URL |
 | `RCA_INGEST_SYNC` | `0` (false) | If `1` / `true`, `POST /v1/traces` writes in the request and returns **201**. If false, traces are first persisted to the `ingest_jobs` backlog and API returns **202**; worker drains backlog to `traces`. |
 | `RCA_INGEST_QUEUE_MAXSIZE` | `10000` | Max backlog row count (`ingest_jobs`) before API returns **503** |
+| `RCA_INGEST_BATCH_MAX_SIZE` | `100` | Max items accepted by `POST /v1/traces/batch` |
 
 For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace, then `GET` it (may need a short delay while worker drains backlog).
 
 - OpenAPI: http://127.0.0.1:8000/docs  
 - Ingest: `POST /v1/traces` with header `X-Tenant-ID` matching `tenant_id` in the JSON body (**201** if sync ingest, **202** if queued)  
+- Batch ingest: `POST /v1/traces/batch` with body `{ "traces": [...] }` and `X-Tenant-ID`  
+  - **201** when all items are synchronously accepted, **202** when all are queued, **207** for mixed outcomes  
+  - SDK-friendly item fields: `status`, `http_status`, optional `error_code`, optional `detail`
 - List: `GET /v1/traces?limit=&offset=&status=` with `X-Tenant-ID`  
 - Fetch: `GET /v1/traces/{trace_id}` with the same `X-Tenant-ID`  
 - Diagnosis (rules v1): `GET /v1/traces/{trace_id}/diagnosis` — primary hypothesis, confidence, evidence (written when the trace is stored)

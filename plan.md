@@ -199,6 +199,22 @@ Everything else supports or monetizes these three.
 
 Adapters are a **product surface**: each adapter is a milestone, not a vague promise.
 
+### 7.6 Ingest frequency, partial traces, and tenant identity
+
+**Default client contract (MVP)**
+
+- **One `POST` per logical pipeline run** when the run **completes** (success or failure): send the **full execution graph** in one payload when possible.
+- If the pipeline **stops early** (crash, timeout, kill), send a **partial trace** as soon as it is useful: whatever steps exist so far, with `status: "partial"` or `"error"` as appropriate, plus error context on the last step. This is **recommended** for debugging; it is not mandatory for every failure (e.g. ultra-low-level crashes may send nothing).
+
+**Why not one POST per step (for now)?**
+
+- Higher volume and server complexity (ordering, idempotency per step). Defer until near–real-time streaming is a proven need.
+
+**`tenant_id` is not “any string the client invents” in production**
+
+- In **MVP/dev**, `X-Tenant-ID` may be a plain string for speed.
+- In **production**, treat tenant as **server-issued**: map **API keys**, **JWT**, or **mTLS** to a tenant record customers cannot spoof. Clients should not pick arbitrary tenant names for real data.
+
 ---
 
 ## 8. Reference architecture (logical)
@@ -278,11 +294,12 @@ Below is the **recommended build order**. Later phases may start in parallel onc
 
 | Item | Problem | Inputs | Outputs | Notes |
 |------|-----------|--------|---------|--------|
-| **Ingestion API** | Clients must send data reliably | SDK / HTTP | Validated events | **Non-blocking** client side; server **async** processing |
+| **Ingestion API** | Clients must send data reliably at high volume | SDK / HTTP (single + batch) | Validated events | **Non-blocking** client side; server **async** processing |
 | **Validation** | Garbage in → garbage out | Raw payloads | Accepted / rejected with reason | Strict schema; quotas per tenant |
 | **Normalization** | Heterogeneous shapes | Raw events | Canonical graph | Fill defaults, normalize timestamps, token fields, link DAG |
 
-**Critical engineering**: Queue between accept and heavy work; batching; retries; **idempotency keys** for step upserts; rate limits.
+**Critical engineering**: Queue between accept and heavy work; **batch ingest endpoint**; retries; **idempotency keys** for step upserts; rate limits/quotas.
+Batch ingest should return SDK-friendly per-item results and use **partial success semantics** (`207 Multi-Status`) when outcomes are mixed.
 
 ### Phase B — Storage
 
@@ -339,7 +356,7 @@ As in §8.3; implement **blob + index** before fancy query features.
 ### 10.1 MVP includes
 
 1. **Canonical schema v1** + validation.
-2. **Ingestion**: HTTP API + minimal SDK (language TBD in implementation phase); **queue-backed** processing.
+2. **Ingestion**: HTTP API + minimal SDK (language TBD in implementation phase); **queue-backed** processing with **single + batch ingest** support.
 3. **Normalization pipeline** + **dual storage** (operational DB + object store for blobs).
 4. **Query APIs** + **UI**: graph + timeline, failure filters.
 5. **Rule engine v1**: small **library of built-in rules** (retrieval quality, tool empty/error, latency spike, truncation).
@@ -525,5 +542,48 @@ The product’s **core diagnosis** is **deterministic**: rules over the **normal
 - [ ] **Coexistence** and **export** treated as success enablers, not late extras.
 - [ ] **Default technology stack** (§16) agreed; **LLM usage** limited to bounded explainer (§16.2) unless product explicitly expands scope.
 - [ ] Ingest remains write-light; expensive diagnosis paths run on-demand or batch unless metrics justify moving them earlier.
+- [ ] **Tenant binding** is server-issued for production (API key / JWT → tenant), not free-form client strings; **ingest contract** documented: one POST per completed run, partial trace on early failure when debugging matters.
+
+---
+
+## 19. Next implementation steps (prioritized — engineer handoff)
+
+Use this section when continuing work in a new session. Order is **suggested**; adjust with measured need.
+
+### Already in repo (baseline)
+
+- Python FastAPI backend: `POST /v1/traces`, `POST /v1/traces/batch`, `GET` list/detail/diagnosis, SQLite + `ingest_jobs` durable backlog, rule-based `DiagnosisRecord`, example `scripts/`.
+
+### Near-term (product + trust)
+
+1. **Server-issued tenant** — API keys or JWT mapping to `tenant_id`; stop trusting raw `X-Tenant-ID` for production.
+2. **Composite uniqueness** — DB constraint/index on `(tenant_id, trace_id)` (and align `ingest_jobs` + `traces` + `diagnoses`).
+3. **Rate limits & quotas** — per-tenant RPS, batch size, daily volume; return 429 with retry hints.
+
+### Data & scale
+
+4. **PostgreSQL** — migrate from SQLite for dev/staging/prod; keep SQLite for fast local tests.
+5. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path.
+6. **External queue (optional)** — SQS / Redis / Pub/Sub when multi-worker or cross-region; DB backlog can remain dev fallback.
+7. **Migrations** — Alembic (or equivalent) instead of only `create_all`.
+
+### Product surface
+
+8. **Web UI** — React + trace graph + timeline + failure-first list; consumes public APIs only.
+9. **Python SDK** — batching, flush, retries, idempotency, redaction hooks; thin wrappers for common frameworks.
+10. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
+
+### Ops & enterprise
+
+11. **Observability** — OpenTelemetry on our own API/workers.
+12. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
+13. **Webhooks / export** — after hypothesis quality is credible.
+
+### GTM
+
+14. **Design partner brief** + **90-day TTPC** measurement loop.
+15. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
+
+---
 
 This plan ties **product strategy**, **GTM validation**, **architecture**, and **implementation defaults** (§16) so technology choices map to **interfaces and outcomes**—maximizing the odds of building something **directionally right** in a crowded market.

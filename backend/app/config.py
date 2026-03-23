@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     ingest_queue_maxsize: int = 10_000
     """Max queued traces before POST returns 503 (only when ingest_sync is False)."""
 
+    ingest_batch_max_size: int = 100
+    """Maximum number of traces accepted by POST /v1/traces/batch."""
+
     @property
     def database_path(self) -> Optional[Path]:
         if self.database_url.startswith("sqlite+aiosqlite:///./"):

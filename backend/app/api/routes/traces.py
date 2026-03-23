@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Optional
+from enum import Enum
+from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_tenant_id
@@ -43,6 +44,44 @@ class IngestTraceResponse(BaseModel):
     )
 
 
+class BatchIngestRequest(BaseModel):
+    traces: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class BatchItemStatus(str, Enum):
+    ACCEPTED = "accepted"
+    QUEUED = "queued"
+    CONFLICT = "conflict"
+    INVALID = "invalid"
+    QUEUE_FULL = "queue_full"
+
+
+class BatchItemErrorCode(str, Enum):
+    DUPLICATE_TRACE_ID = "duplicate_trace_id"
+    VALIDATION_ERROR = "validation_error"
+    QUEUE_CAPACITY_REACHED = "queue_capacity_reached"
+    TENANT_MISMATCH = "tenant_mismatch"
+
+
+class BatchIngestItemResult(BaseModel):
+    index: int
+    trace_id: Optional[UUID] = None
+    status: BatchItemStatus
+    http_status: int = Field(description="Equivalent per-item HTTP status semantics")
+    error_code: Optional[BatchItemErrorCode] = None
+    detail: Optional[str] = None
+
+
+class BatchIngestResponse(BaseModel):
+    total: int
+    accepted: int
+    queued: int
+    conflicts: int
+    invalid: int
+    queue_full: int
+    items: list[BatchIngestItemResult]
+
+
 class TraceSummary(BaseModel):
     trace_id: UUID
     tenant_id: str
@@ -69,6 +108,36 @@ def _row_to_summary(row: TraceRecord) -> TraceSummary:
         ended_at=row.ended_at.isoformat() if row.ended_at else None,
         step_count=len(steps) if isinstance(steps, list) else 0,
     )
+
+
+async def _ingest_one_trace(
+    trace: Trace,
+    tenant_id: str,
+    session: AsyncSession,
+) -> IngestTraceResponse:
+    if trace.tenant_id != tenant_id:
+        raise HTTPException(
+            status_code=400,
+            detail="body.tenant_id must match X-Tenant-ID header",
+        )
+    normalized = normalize_trace(trace)
+    if await trace_exists(session, tenant_id, trace.trace_id):
+        raise HTTPException(status_code=409, detail=f"trace_id {trace.trace_id} already exists")
+
+    if settings.ingest_sync:
+        try:
+            await insert_trace(session, normalized)
+        except TraceConflictError:
+            raise HTTPException(status_code=409, detail=f"trace_id {trace.trace_id} already exists") from None
+        return IngestTraceResponse(trace_id=trace.trace_id, status="accepted")
+
+    try:
+        await enqueue_trace(normalized)
+    except IngestTraceConflictError:
+        raise HTTPException(status_code=409, detail=f"trace_id {trace.trace_id} already exists") from None
+    except IngestQueueFullError:
+        raise HTTPException(status_code=503, detail="ingest queue is full; retry later") from None
+    return IngestTraceResponse(trace_id=trace.trace_id, status="queued")
 
 
 @router.get("", response_model=TraceListResponse)
@@ -125,44 +194,107 @@ async def ingest_trace(
     tenant_id: str = Depends(require_tenant_id),
     session: AsyncSession = Depends(db_session),
 ) -> IngestTraceResponse:
-    if body.tenant_id != tenant_id:
+    result = await _ingest_one_trace(body, tenant_id, session)
+    response.status_code = 201 if result.status == "accepted" else 202
+    return result
+
+
+@router.post("/batch", response_model=BatchIngestResponse)
+async def ingest_traces_batch(
+    body: BatchIngestRequest,
+    response: Response,
+    tenant_id: str = Depends(require_tenant_id),
+    session: AsyncSession = Depends(db_session),
+) -> BatchIngestResponse:
+    total = len(body.traces)
+    if total == 0:
+        raise HTTPException(status_code=400, detail="traces must contain at least one item")
+    if total > settings.ingest_batch_max_size:
         raise HTTPException(
             status_code=400,
-            detail="body.tenant_id must match X-Tenant-ID header",
-        )
-    normalized = normalize_trace(body)
-
-    if await trace_exists(session, tenant_id, body.trace_id):
-        raise HTTPException(
-            status_code=409,
-            detail=f"trace_id {body.trace_id} already exists",
+            detail=f"batch too large: max {settings.ingest_batch_max_size}",
         )
 
-    if settings.ingest_sync:
+    items: list[BatchIngestItemResult] = []
+    accepted = queued = conflicts = invalid = queue_full = 0
+
+    for idx, raw in enumerate(body.traces):
         try:
-            await insert_trace(session, normalized)
-        except TraceConflictError:
-            raise HTTPException(
-                status_code=409,
-                detail=f"trace_id {body.trace_id} already exists",
-            ) from None
-        response.status_code = 201
-        return IngestTraceResponse(trace_id=body.trace_id, status="accepted")
+            t = Trace.model_validate(raw)
+        except ValidationError as e:
+            invalid += 1
+            items.append(
+                BatchIngestItemResult(
+                    index=idx,
+                    status=BatchItemStatus.INVALID,
+                    http_status=422,
+                    error_code=BatchItemErrorCode.VALIDATION_ERROR,
+                    detail=str(e.errors()[0].get("msg", "invalid trace payload")),
+                )
+            )
+            continue
 
-    try:
-        await enqueue_trace(normalized)
-    except IngestTraceConflictError:
-        raise HTTPException(
-            status_code=409,
-            detail=f"trace_id {body.trace_id} already exists",
-        ) from None
-    except IngestQueueFullError:
-        raise HTTPException(
-            status_code=503,
-            detail="ingest queue is full; retry later",
-        ) from None
-    response.status_code = 202
-    return IngestTraceResponse(trace_id=body.trace_id, status="queued")
+        try:
+            result = await _ingest_one_trace(t, tenant_id, session)
+            if result.status == "accepted":
+                accepted += 1
+            else:
+                queued += 1
+            items.append(
+                BatchIngestItemResult(
+                    index=idx,
+                    trace_id=result.trace_id,
+                    status=(
+                        BatchItemStatus.ACCEPTED
+                        if result.status == "accepted"
+                        else BatchItemStatus.QUEUED
+                    ),
+                    http_status=201 if result.status == "accepted" else 202,
+                )
+            )
+        except HTTPException as e:
+            trace_id = t.trace_id
+            if e.status_code == 409:
+                conflicts += 1
+                status = BatchItemStatus.CONFLICT
+                error_code = BatchItemErrorCode.DUPLICATE_TRACE_ID
+            elif e.status_code == 503:
+                queue_full += 1
+                status = BatchItemStatus.QUEUE_FULL
+                error_code = BatchItemErrorCode.QUEUE_CAPACITY_REACHED
+            elif e.status_code == 400:
+                invalid += 1
+                status = BatchItemStatus.INVALID
+                error_code = BatchItemErrorCode.TENANT_MISMATCH
+            else:
+                invalid += 1
+                status = BatchItemStatus.INVALID
+                error_code = BatchItemErrorCode.VALIDATION_ERROR
+            items.append(
+                BatchIngestItemResult(
+                    index=idx,
+                    trace_id=trace_id,
+                    status=status,
+                    http_status=e.status_code,
+                    error_code=error_code,
+                    detail=str(e.detail),
+                )
+            )
+
+    if invalid == 0 and conflicts == 0 and queue_full == 0:
+        response.status_code = 201 if accepted > 0 else 202
+    else:
+        response.status_code = 207
+
+    return BatchIngestResponse(
+        total=total,
+        accepted=accepted,
+        queued=queued,
+        conflicts=conflicts,
+        invalid=invalid,
+        queue_full=queue_full,
+        items=items,
+    )
 
 
 @router.get("/{trace_id}", response_model=Trace)
