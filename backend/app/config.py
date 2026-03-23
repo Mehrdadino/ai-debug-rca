@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./data/app.db"
     """Async SQLAlchemy URL. Default: local SQLite file under ./data/"""
 
+    ingest_sync: bool = False
+    """If True, write traces in the request handler (201). If False, enqueue and return 202."""
+
+    ingest_queue_maxsize: int = 10_000
+    """Max queued traces before POST returns 503 (only when ingest_sync is False)."""
+
     @property
     def database_path(self) -> Optional[Path]:
         if self.database_url.startswith("sqlite+aiosqlite:///./"):

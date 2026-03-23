@@ -1,6 +1,6 @@
 # Backend (Python)
 
-Phase **A/B (initial)**: canonical trace schema (Pydantic), ingest + get-by-id APIs, SQLite persistence for local dev (Postgres in production later).
+Phase **A/B (continued)**: canonical trace schema (Pydantic), **async ingest queue** (in-process worker; swap for SQS/Redis later), **list traces** with pagination/filters, SQLite for local dev (Postgres in production later).
 
 ## Requirements
 
@@ -32,8 +32,19 @@ python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 Use **`python3 -m uvicorn`** so the same interpreter that has FastAPI/uvicorn is used. The bare `uvicorn` command only works if that interpreter’s `bin` directory is on your `PATH` (e.g. after `source .venv/bin/activate`).
 
+### Environment
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `RCA_DATABASE_URL` | `sqlite+aiosqlite:///./data/app.db` | Async SQLAlchemy URL |
+| `RCA_INGEST_SYNC` | `0` (false) | If `1` / `true`, `POST /v1/traces` writes in the request and returns **201**. If false, traces are **queued** and the API returns **202** (worker persists in background). |
+| `RCA_INGEST_QUEUE_MAXSIZE` | `10000` | When ingest is async, queue capacity before **503** |
+
+For local curl testing of the async path, use `export RCA_INGEST_SYNC=0` (or unset), post a trace, then `GET` it (you may need a short delay before the worker flushes the queue on a loaded machine).
+
 - OpenAPI: http://127.0.0.1:8000/docs  
-- Ingest: `POST /v1/traces` with header `X-Tenant-ID` matching `tenant_id` in the JSON body  
+- Ingest: `POST /v1/traces` with header `X-Tenant-ID` matching `tenant_id` in the JSON body (**201** if sync ingest, **202** if queued)  
+- List: `GET /v1/traces?limit=&offset=&status=` with `X-Tenant-ID`  
 - Fetch: `GET /v1/traces/{trace_id}` with the same `X-Tenant-ID`
 
 ## Tests
@@ -46,8 +57,7 @@ pytest -v
 
 ## Next implementation steps (see `plan.md`)
 
-1. **Queue** between ingest accept and normalization (SQS / Redis / in-proc for dev).  
-2. **List / filter traces** (`GET /v1/traces`) with pagination.  
-3. **Postgres** + object storage for blobs; keep SQLite for tests.  
-4. **API keys / auth** beyond `X-Tenant-ID`.  
-5. **Diagnosis engine** + `DiagnosisRecord` storage.
+1. **External queue** (SQS / Redis) + multiple workers; keep in-proc queue as dev default.  
+2. **Postgres** + object storage for blobs; keep SQLite for tests.  
+3. **API keys / auth** beyond `X-Tenant-ID`.  
+4. **Diagnosis engine** + `DiagnosisRecord` storage.

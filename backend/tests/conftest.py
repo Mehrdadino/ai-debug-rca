@@ -6,6 +6,8 @@ import asyncio
 import os
 
 os.environ.setdefault("RCA_DATABASE_URL", "sqlite+aiosqlite:///./data/pytest.db")
+# Deterministic tests: write in-request (201) instead of queued (202).
+os.environ.setdefault("RCA_INGEST_SYNC", "1")
 
 import pytest
 from fastapi.testclient import TestClient
