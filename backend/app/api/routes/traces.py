@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
@@ -8,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_tenant_id
+from app.api.deps import get_tenant_id
 from app.config import settings
 from app.db.engine import get_session
 from app.db.models import TraceRecord
@@ -118,7 +119,7 @@ async def _ingest_one_trace(
     if trace.tenant_id != tenant_id:
         raise HTTPException(
             status_code=400,
-            detail="body.tenant_id must match X-Tenant-ID header",
+            detail="body.tenant_id must match authenticated tenant",
         )
     normalized = normalize_trace(trace)
     if await trace_exists(session, tenant_id, trace.trace_id):
@@ -142,16 +143,32 @@ async def _ingest_one_trace(
 
 @router.get("", response_model=TraceListResponse)
 async def list_traces_endpoint(
-    tenant_id: str = Depends(require_tenant_id),
+    tenant_id: str = Depends(get_tenant_id),
     session: AsyncSession = Depends(db_session),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     status: Optional[TraceStatus] = Query(None, description="Filter by trace status"),
+    started_at_from: Optional[datetime] = Query(
+        None,
+        description="Inclusive lower bound on trace started_at (run time), ISO-8601.",
+    ),
+    started_at_to: Optional[datetime] = Query(
+        None,
+        description="Inclusive upper bound on trace started_at (run time), ISO-8601.",
+    ),
 ) -> TraceListResponse:
+    if started_at_from is not None and started_at_to is not None:
+        if started_at_from > started_at_to:
+            raise HTTPException(
+                status_code=400,
+                detail="started_at_from must be <= started_at_to",
+            )
     rows = await list_traces(
         session,
         tenant_id,
         status=status.value if status else None,
+        started_at_from=started_at_from,
+        started_at_to=started_at_to,
         limit=limit,
         offset=offset,
     )
@@ -168,7 +185,7 @@ async def list_traces_endpoint(
 @router.get("/{trace_id}/diagnosis", response_model=Diagnosis)
 async def get_trace_diagnosis(
     trace_id: UUID,
-    tenant_id: str = Depends(require_tenant_id),
+    tenant_id: str = Depends(get_tenant_id),
     session: AsyncSession = Depends(db_session),
 ) -> Diagnosis:
     row = await get_diagnosis_for_trace(session, tenant_id, trace_id)
@@ -191,7 +208,7 @@ async def get_trace_diagnosis(
 async def ingest_trace(
     body: Trace,
     response: Response,
-    tenant_id: str = Depends(require_tenant_id),
+    tenant_id: str = Depends(get_tenant_id),
     session: AsyncSession = Depends(db_session),
 ) -> IngestTraceResponse:
     result = await _ingest_one_trace(body, tenant_id, session)
@@ -203,7 +220,7 @@ async def ingest_trace(
 async def ingest_traces_batch(
     body: BatchIngestRequest,
     response: Response,
-    tenant_id: str = Depends(require_tenant_id),
+    tenant_id: str = Depends(get_tenant_id),
     session: AsyncSession = Depends(db_session),
 ) -> BatchIngestResponse:
     total = len(body.traces)
@@ -300,7 +317,7 @@ async def ingest_traces_batch(
 @router.get("/{trace_id}", response_model=Trace)
 async def get_trace(
     trace_id: UUID,
-    tenant_id: str = Depends(require_tenant_id),
+    tenant_id: str = Depends(get_tenant_id),
     session: AsyncSession = Depends(db_session),
 ) -> Trace:
     row = await get_trace_by_id(session, tenant_id, trace_id)

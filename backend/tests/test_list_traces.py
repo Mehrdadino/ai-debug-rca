@@ -5,12 +5,18 @@ import uuid
 from fastapi.testclient import TestClient
 
 
-def _minimal_trace(tid: uuid.UUID, tenant: str, status: str = "success") -> dict:
+def _minimal_trace(
+    tid: uuid.UUID,
+    tenant: str,
+    status: str = "success",
+    *,
+    started_at: str = "2025-01-15T10:00:00Z",
+) -> dict:
     return {
         "schema_version": "1.0",
         "trace_id": str(tid),
         "tenant_id": tenant,
-        "started_at": "2025-01-15T10:00:00Z",
+        "started_at": started_at,
         "status": status,
         "steps": [{"step_id": "s1", "type": "retrieval", "input": {}, "output": {}}],
         "edges": [],
@@ -37,6 +43,53 @@ def test_list_traces_pagination_and_filter(client: TestClient) -> None:
     assert err_only.status_code == 200
     assert len(err_only.json()["items"]) == 1
     assert err_only.json()["items"][0]["status"] == "error"
+
+
+def test_list_traces_time_range_optional(client: TestClient) -> None:
+    """started_at_from / started_at_to are optional; filter on trace run time (started_at)."""
+    h = {"X-Tenant-ID": "org_time"}
+    t_early = uuid.uuid4()
+    t_mid = uuid.uuid4()
+    t_late = uuid.uuid4()
+    client.post(
+        "/v1/traces",
+        json=_minimal_trace(t_early, "org_time", started_at="2025-01-10T12:00:00Z"),
+        headers=h,
+    )
+    client.post(
+        "/v1/traces",
+        json=_minimal_trace(t_mid, "org_time", started_at="2025-01-20T12:00:00Z"),
+        headers=h,
+    )
+    client.post(
+        "/v1/traces",
+        json=_minimal_trace(t_late, "org_time", started_at="2025-01-30T12:00:00Z"),
+        headers=h,
+    )
+
+    r = client.get(
+        "/v1/traces",
+        headers=h,
+        params={
+            "started_at_from": "2025-01-15T00:00:00Z",
+            "started_at_to": "2025-01-25T23:59:59Z",
+        },
+    )
+    assert r.status_code == 200
+    ids = {item["trace_id"] for item in r.json()["items"]}
+    assert str(t_mid) in ids
+    assert str(t_early) not in ids
+    assert str(t_late) not in ids
+
+    bad = client.get(
+        "/v1/traces",
+        headers=h,
+        params={
+            "started_at_from": "2025-02-01T00:00:00Z",
+            "started_at_to": "2025-01-01T00:00:00Z",
+        },
+    )
+    assert bad.status_code == 400
 
 
 def test_list_traces_tenant_isolation(client: TestClient) -> None:

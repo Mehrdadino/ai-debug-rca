@@ -40,16 +40,17 @@ Use **`python3 -m uvicorn`** so the same interpreter that has FastAPI/uvicorn is
 | `RCA_INGEST_SYNC` | `0` (false) | If `1` / `true`, `POST /v1/traces` writes in the request and returns **201**. If false, traces are first persisted to the `ingest_jobs` backlog and API returns **202**; worker drains backlog to `traces`. |
 | `RCA_INGEST_QUEUE_MAXSIZE` | `10000` | Max backlog row count (`ingest_jobs`) before API returns **503** |
 | `RCA_INGEST_BATCH_MAX_SIZE` | `100` | Max items accepted by `POST /v1/traces/batch` |
+| `RCA_API_KEYS` | *(empty)* | JSON object mapping API key → `tenant_id`, e.g. `{"sk_live_xxx":"org_123"}`. When set, clients must send **`Authorization: Bearer <key>`** or **`X-API-Key`**; **`X-Tenant-ID` is not used for auth** (body `tenant_id` must still match the resolved tenant). When empty, local/dev behavior uses **`X-Tenant-ID`** only. |
 
 For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace, then `GET` it (may need a short delay while worker drains backlog).
 
 - OpenAPI: http://127.0.0.1:8000/docs  
-- Ingest: `POST /v1/traces` with header `X-Tenant-ID` matching `tenant_id` in the JSON body (**201** if sync ingest, **202** if queued)  
-- Batch ingest: `POST /v1/traces/batch` with body `{ "traces": [...] }` and `X-Tenant-ID`  
+- Ingest: `POST /v1/traces` with auth as above; JSON `tenant_id` must match the authenticated tenant (**201** if sync ingest, **202** if queued)  
+- Batch ingest: `POST /v1/traces/batch` with body `{ "traces": [...] }` and the same auth headers  
   - **201** when all items are synchronously accepted, **202** when all are queued, **207** for mixed outcomes  
   - SDK-friendly item fields: `status`, `http_status`, optional `error_code`, optional `detail`
-- List: `GET /v1/traces?limit=&offset=&status=` with `X-Tenant-ID`  
-- Fetch: `GET /v1/traces/{trace_id}` with the same `X-Tenant-ID`  
+- List: `GET /v1/traces?limit=&offset=&status=&started_at_from=&started_at_to=` — optional **inclusive** time bounds on **`started_at`** (run time), ISO-8601; omit both for no time filter  
+- Fetch: `GET /v1/traces/{trace_id}` with the same auth  
 - Diagnosis (rules v1): `GET /v1/traces/{trace_id}/diagnosis` — primary hypothesis, confidence, evidence (written when the trace is stored)
 
 ## Tests
@@ -62,7 +63,7 @@ pytest -v
 
 ## Next implementation steps (see `plan.md`)
 
-1. **External durable queue** (SQS / Redis) + multi-worker scaling; keep DB backlog as local fallback.  
-2. **Postgres** + object storage for blobs; keep SQLite for tests.  
-3. **API keys / auth** beyond `X-Tenant-ID`.  
+1. **Composite uniqueness** — DB constraint on `(tenant_id, trace_id)` across `traces`, `diagnoses`, `ingest_jobs`.  
+2. **External durable queue** (SQS / Redis) + multi-worker scaling; keep DB backlog as local fallback.  
+3. **Postgres** + object storage for blobs; keep SQLite for tests.  
 4. **LLM explainer** (optional) over structured `Diagnosis` + more rules / tunable thresholds.

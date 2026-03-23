@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +22,27 @@ class Settings(BaseSettings):
 
     ingest_batch_max_size: int = 100
     """Maximum number of traces accepted by POST /v1/traces/batch."""
+
+    api_keys: dict[str, str] = Field(default_factory=dict)
+    """Map API key string → tenant_id. When non-empty, requests must authenticate with
+    Authorization: Bearer <key> or X-API-Key (X-Tenant-ID is not trusted for tenancy)."""
+
+    @field_validator("api_keys", mode="before")
+    @classmethod
+    def _parse_api_keys(cls, v: Any) -> dict[str, str]:
+        if v is None or v == "":
+            return {}
+        if isinstance(v, dict):
+            return {str(k): str(val) for k, val in v.items()}
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return {}
+            parsed = json.loads(s)
+            if not isinstance(parsed, dict):
+                raise ValueError("RCA_API_KEYS must be a JSON object")
+            return {str(k): str(val) for k, val in parsed.items()}
+        raise TypeError("RCA_API_KEYS must be a JSON object or dict")
 
     @property
     def database_path(self) -> Optional[Path]:

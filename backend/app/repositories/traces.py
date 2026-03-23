@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -76,12 +77,18 @@ async def list_traces(
     tenant_id: str,
     *,
     status: Optional[str] = None,
+    started_at_from: Optional[datetime] = None,
+    started_at_to: Optional[datetime] = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[TraceRecord]:
     q = select(TraceRecord).where(TraceRecord.tenant_id == tenant_id)
     if status is not None:
         q = q.where(TraceRecord.status == status)
+    if started_at_from is not None:
+        q = q.where(TraceRecord.started_at >= started_at_from)
+    if started_at_to is not None:
+        q = q.where(TraceRecord.started_at <= started_at_to)
     q = q.order_by(TraceRecord.started_at.desc()).offset(offset).limit(limit + 1)
     result = await session.execute(q)
     return list(result.scalars().all())

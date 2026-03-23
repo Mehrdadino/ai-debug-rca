@@ -307,7 +307,7 @@ As in §8.3; implement **blob + index** before fancy query features.
 
 ### Phase C — Query & API
 
-- Filter/list traces (failure-first presets).
+- Filter/list traces (failure-first presets; **optional time range** on trace **`started_at`** / run time for “Kibana-style” windows).
 - Get trace detail (full graph for UI).
 - Pagination, sorting by time / severity.
 
@@ -379,7 +379,7 @@ As in §8.3; implement **blob + index** before fancy query features.
 | Phase | Name | Focus | Exit criteria |
 |-------|------|--------|----------------|
 | **0** | Design lock + partners | JSON Schema; ICP; **5–10 failure scenarios** from partners; **baseline time-to-cause** (even estimated) | Schema v1 frozen; **3+** committed partners; demo script |
-| **1** | Ingest + store + UI | End-to-end trace visible in UI | Partner debugs **one real production failure** from graph alone |
+| **1** | Ingest + store + UI + **SDK v0** | End-to-end trace visible in UI; **thin Python SDK** (ingest, retries, **`trace_id` returned**, logging hooks per §16.3) | Partner debugs **one real production failure** from graph alone |
 | **2** | Rules + hypothesis | Built-in rules + primary hypothesis + evidence | **Measured** reduction in time-to-plausible-cause vs Phase 0 baseline |
 | **3** | LLM explanation | Template-guided explanations; **thumbs feedback** on hypotheses | Users prefer explanation vs raw JSON; feedback loop feeding rule weights |
 | **4** | Enterprise hardening | SSO, stronger RBAC, audit logs, SLAs | Pass security review for one mid-market customer |
@@ -387,6 +387,16 @@ As in §8.3; implement **blob + index** before fancy query features.
 | **6** | Advanced | Replay, semantic search, custom rules, alerting | Revenue-driven prioritization |
 
 Phases can overlap (e.g. security items start in Phase 2), but **Phase 1–3** should not balloon with Phase 6 features.
+
+### 11.1 SDK roadmap (complements §11)
+
+SDK ships **after** the HTTP contract is stable enough to wrap; it is **not** a blocker for UI on the public API.
+
+| Horizon | Scope |
+|---------|--------|
+| **Phase 1** | **Python SDK v0**: single + batch ingest, retries/backoff, **`trace_id` in responses**, optional **callback / hook** for structured logging (see §16.3); thin, dependency-light. |
+| **Phase 2** | Redaction hooks, OpenTelemetry baggage / context helpers, **2–3 copy-paste framework recipes** (plan §7.5). |
+| **Phase 3+** | Additional language SDKs only when **design partners or revenue** justify; core remains **schema + HTTP**. |
 
 ---
 
@@ -492,6 +502,14 @@ Single **coherent** stack for Phase 1–3 (speed to proof, one primary language 
 - **ClickHouse / warehouse**: When **analytics at very large volume** outgrows Postgres + partitioning; defer for MVP.
 - **Self-hosted LLM**: Enterprise air-gap or policy—**later**; keep the **same explainer interface** so the app stays provider-agnostic.
 
+### 16.1.1 PostgreSQL scale (post-MVP): partitioning by tenant
+
+**Not required for MVP.** Introduce when **table size**, **vacuum/IO**, or **retention drops** justify operational complexity.
+
+**Recommendation:** use **`PARTITION BY HASH (tenant_id)`** with a **fixed modulus** (e.g. **32 or 64** partitions)—not **`LIST (tenant_id)`** per customer. **Why:** tenant count can grow very large; **one partition per tenant** becomes unmanageable. **HASH** keeps a **bounded** partition count, still aligns with **tenant-scoped queries**, and combines with **B-tree indexes** such as `(tenant_id, started_at DESC)` for list/time-window patterns.
+
+**Optional later:** **subpartition by time** (e.g. monthly `RANGE` on `started_at` or `ingested_at`) under each hash bucket for TTL-style drops—only when measured.
+
 ### 16.2 External LLM calls — why, where, and what we do *not* use them for
 
 The product’s **core diagnosis** is **deterministic**: rules over the **normalized execution graph**, scoring, and a **primary hypothesis** with **evidence** (`step_id`s, rule IDs). **That path does not require** calling OpenAI or Anthropic.
@@ -518,6 +536,19 @@ The product’s **core diagnosis** is **deterministic**: rules over the **normal
 **Why OpenAI / Anthropic (or Azure) specifically**
 
 - They are **API-complete** for structured chat/completions with tool/schema-style constraints; **not** because the product is “built on ChatGPT”—only the **explainer** (and future optional features like semantic search embeddings) may call out; **embeddings** can use the same or a dedicated embedding API.
+
+### 16.3 Client SDK — `trace_id`, async ingest, and logging (division of responsibility)
+
+**Principle:** The **application** owns **what** gets logged (business context, PII policy). The **SDK** owns **making correlation easy and consistent**.
+
+| Concern | Preferred owner |
+|--------|------------------|
+| Emitting `trace_id` into app logs / log pipeline | **Application**, with **SDK helpers** (e.g. one-line hook, OTel baggage) so callsites do not diverge. |
+| Ensuring `trace_id` is **known** after ingest | **SDK** returns **`trace_id`** (and per-item outcomes) from **`POST` responses**, including **202 Accepted** when the server has **accepted** the payload but processing continues asynchronously. |
+| Fire-and-forget / background flush | SDK should still expose **completion** (future, callback, or batch result) so **`trace_id` is not dropped**; “flush with no completion path” is discouraged for production observability. |
+| Creating the id | **Best practice:** generate or accept **`trace_id` at the start of the user-facing request** and propagate through logs **before** ingest completes; ingest **confirms** the same id to the product. Server-issued ids are fine if documented—then the **first** reliable log line may be **after** the HTTP response unless the app pre-allocates. |
+
+**Summary:** Ship SDK hooks so customers *can* centralize logging; do not silently log full prompts from the SDK without redaction policy alignment (Phase 2 hooks).
 
 ---
 
@@ -552,7 +583,7 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 
 ### Already in repo (baseline)
 
-- Python FastAPI backend: `POST /v1/traces`, `POST /v1/traces/batch`, `GET` list/detail/diagnosis, SQLite + `ingest_jobs` durable backlog, rule-based `DiagnosisRecord`, example `scripts/`.
+- Python FastAPI backend: `POST /v1/traces`, `POST /v1/traces/batch`, `GET` list (optional **`started_at_from` / `started_at_to`** on run time) / detail / diagnosis, SQLite + `ingest_jobs` durable backlog, rule-based `DiagnosisRecord`, optional **API key → tenant** auth, example `scripts/`.
 
 ### Near-term (product + trust)
 
@@ -570,7 +601,7 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 ### Product surface
 
 8. **Web UI** — React + trace graph + timeline + failure-first list; consumes public APIs only.
-9. **Python SDK** — batching, flush, retries, idempotency, redaction hooks; thin wrappers for common frameworks.
+9. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
 10. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
 
 ### Ops & enterprise
