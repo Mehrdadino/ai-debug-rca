@@ -14,7 +14,7 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -U pip
-pip install "fastapi>=0.115" "uvicorn[standard]>=0.32" "pydantic>=2.10" "pydantic-settings>=2.6" "sqlalchemy[asyncio]>=2.0.36" "aiosqlite>=0.20" "asyncpg>=0.30" "psycopg[binary]>=3.2" "alembic>=1.14"
+pip install "fastapi>=0.115" "uvicorn[standard]>=0.32" "pydantic>=2.10" "pydantic-settings>=2.6" "sqlalchemy[asyncio]>=2.0.36" "aiosqlite>=0.20" "asyncpg>=0.30" "psycopg[binary]>=3.2" "PyJWT>=2.9" "alembic>=1.14"
 pip install "httpx>=0.27" "pytest>=8.3" "pytest-asyncio>=0.24"  # dev
 ```
 
@@ -57,12 +57,17 @@ Use **`python3 -m uvicorn`** so the same interpreter that has FastAPI/uvicorn is
 | `RCA_INGEST_RATE_LIMIT_RPS` | `0` (disabled) | Per-tenant ingest request limit (requests/second). When exceeded, API returns **429** with `Retry-After`. |
 | `RCA_INGEST_DAILY_TRACE_QUOTA` | `0` (disabled) | Per-tenant ingest quota (trace count/day UTC). Applied to single and batch ingest. Exceeding returns **429** with `Retry-After`. |
 | `RCA_API_KEYS` | *(empty)* | JSON object mapping API key → `tenant_id`, e.g. `{"sk_live_xxx":"org_123"}`. When set, clients must send **`Authorization: Bearer <key>`** or **`X-API-Key`**; **`X-Tenant-ID` is not used for auth** (body `tenant_id` must still match the resolved tenant). When empty, local/dev behavior uses **`X-Tenant-ID`** only. |
+| `RCA_JWT_SECRET` | *(empty / disabled)* | Enables bearer JWT auth when set. API resolves tenant from JWT claim (`RCA_JWT_TENANT_CLAIM`, default `tenant_id`). |
+| `RCA_JWT_ALGORITHM` | `HS256` | JWT verification algorithm (HMAC path for now). |
+| `RCA_JWT_TENANT_CLAIM` | `tenant_id` | Claim name containing tenant binding. |
+| `RCA_JWT_ISSUER` | *(empty / optional)* | Optional expected JWT `iss`. |
+| `RCA_JWT_AUDIENCE` | *(empty / optional)* | Optional expected JWT `aud`. |
 | `RCA_ADMIN_TOKEN` | *(empty / disabled)* | Enables admin APIs for per-tenant limits via `X-Admin-Token`. |
 
 For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace, then `GET` it (may need a short delay while worker drains backlog).
 
 - OpenAPI: http://127.0.0.1:8000/docs  
-- Ingest: `POST /v1/traces` with auth as above; JSON `tenant_id` must match the authenticated tenant (**201** if sync ingest, **202** if queued)  
+- Ingest: `POST /v1/traces` with auth as above; bearer token may be API key or JWT. JSON `tenant_id` must match the authenticated tenant (**201** if sync ingest, **202** if queued)  
 - Batch ingest: `POST /v1/traces/batch` with body `{ "traces": [...] }` and the same auth headers  
   - **201** when all items are synchronously accepted, **202** when all are queued, **207** for mixed outcomes  
   - SDK-friendly item fields: `status`, `http_status`, optional `error_code`, optional `detail`

@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     """Map API key string → tenant_id. When non-empty, requests must authenticate with
     Authorization: Bearer <key> or X-API-Key (X-Tenant-ID is not trusted for tenancy)."""
 
+    jwt_secret: str = ""
+    """HMAC secret for bearer JWT validation (HS256 by default). Empty disables JWT auth."""
+
+    jwt_algorithm: str = "HS256"
+    """JWT algorithm used for verification."""
+
+    jwt_tenant_claim: str = "tenant_id"
+    """JWT claim that carries tenant identifier."""
+
+    jwt_issuer: str = ""
+    """Optional expected JWT issuer."""
+
+    jwt_audience: str = ""
+    """Optional expected JWT audience."""
+
     admin_token: str = ""
     """Static admin token for privileged admin APIs (tenant limits management)."""
 

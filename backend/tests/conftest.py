@@ -56,4 +56,8 @@ def _reset_rate_limits() -> None:
     settings.ingest_rate_limit_rps = 0
     settings.ingest_daily_trace_quota = 0
     settings.admin_token = ""
+    settings.jwt_secret = ""
+    settings.jwt_issuer = ""
+    settings.jwt_audience = ""
+    settings.jwt_tenant_claim = "tenant_id"
     tenant_ingest_limiter.reset()

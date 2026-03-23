@@ -4,35 +4,72 @@ import re
 from typing import Annotated, Optional
 
 from fastapi import Header, HTTPException
+import jwt
+from jwt import InvalidTokenError
 
 from app.config import settings
 
 _BEARER = re.compile(r"^\s*Bearer\s+(.+?)\s*$", re.IGNORECASE | re.DOTALL)
 
 
-def _tenant_from_api_key(authorization: Optional[str], x_api_key: Optional[str]) -> str:
+def _tenant_from_jwt(token: str) -> str:
+    kwargs: dict[str, object] = {
+        "algorithms": [settings.jwt_algorithm],
+    }
+    if settings.jwt_audience:
+        kwargs["audience"] = settings.jwt_audience
+    if settings.jwt_issuer:
+        kwargs["issuer"] = settings.jwt_issuer
+    try:
+        claims = jwt.decode(token, settings.jwt_secret, **kwargs)
+    except InvalidTokenError as e:
+        raise HTTPException(status_code=401, detail="Invalid JWT token") from e
+    tenant_raw = claims.get(settings.jwt_tenant_claim)
+    tenant_id = str(tenant_raw).strip() if tenant_raw is not None else ""
+    if not tenant_id:
+        raise HTTPException(
+            status_code=401,
+            detail=f"JWT is missing required tenant claim: {settings.jwt_tenant_claim}",
+        )
+    return tenant_id
+
+
+def _tenant_from_auth(
+    authorization: Optional[str],
+    x_api_key: Optional[str],
+) -> str:
     token: Optional[str] = None
     if authorization:
         m = _BEARER.match(authorization)
         if m:
             token = m.group(1).strip()
         elif authorization.strip():
-            # Reject malformed Authorization so clients do not assume it worked.
             raise HTTPException(
                 status_code=401,
-                detail="Authorization must be Bearer <api_key> when using API key auth",
+                detail="Authorization must be Bearer <token>",
             )
     if not token and x_api_key is not None and x_api_key.strip():
         token = x_api_key.strip()
+        if not settings.api_keys:
+            raise HTTPException(
+                status_code=401,
+                detail="X-API-Key is unsupported unless API key auth is configured",
+            )
     if not token:
         raise HTTPException(
             status_code=401,
-            detail="Authentication required: send Authorization: Bearer <api_key> or X-API-Key",
+            detail=(
+                "Authentication required: send Authorization: Bearer <api_key_or_jwt>"
+                " (or X-API-Key when API keys are configured)"
+            ),
         )
-    tenant_id = settings.api_keys.get(token)
-    if tenant_id is None:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return tenant_id
+    if settings.api_keys:
+        tenant_from_key = settings.api_keys.get(token)
+        if tenant_from_key is not None:
+            return tenant_from_key
+    if settings.jwt_secret:
+        return _tenant_from_jwt(token)
+    raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 def _tenant_from_header(x_tenant_id: Optional[str]) -> str:
@@ -46,9 +83,9 @@ def get_tenant_id(
     x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
     x_tenant_id: Annotated[Optional[str], Header(alias="X-Tenant-ID")] = None,
 ) -> str:
-    """Resolve tenant: server-issued mapping from API keys when configured, else X-Tenant-ID (dev)."""
-    if settings.api_keys:
-        return _tenant_from_api_key(authorization, x_api_key)
+    """Resolve tenant from auth (API key/JWT) when configured, else X-Tenant-ID (dev)."""
+    if settings.api_keys or settings.jwt_secret:
+        return _tenant_from_auth(authorization, x_api_key)
     return _tenant_from_header(x_tenant_id)
 
 

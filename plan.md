@@ -594,17 +594,17 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 ### Near-term (product + trust)
 
 1. **JWT auth option** — bearer tokens mapping to `tenant_id` where static API keys are insufficient; keep server-issued tenant binding semantics.
+2. **Web UI** — React + trace graph + timeline + failure-first list; consumes public APIs only.
+3. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path.
 
 ### Data & scale
 
-2. **PostgreSQL** — migrate from SQLite for dev/staging/prod; keep SQLite for fast local tests.
-3. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path.
 4. **Distributed ingest queue + workers** — move background ingest from DB-backed polling to a distributed queue/consumer model (SQS / Redis Streams / Pub/Sub) for multi-instance safety, retry/DLQ semantics, and cross-region scale; keep DB backlog as local/dev fallback only.
 5. **Distributed rate limits / quotas (Redis)** — use Redis as the shared backend for rate limits and daily quotas so 429 behavior stays correct across multiple API instances.
+6. **PostgreSQL scale hardening** — tenant hash partitioning and operational tuning once measured load justifies it; keep SQLite for fast local tests.
 
 ### Product surface
 
-6. **Web UI** — React + trace graph + timeline + failure-first list; consumes public APIs only.
 7. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
 8. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
 
