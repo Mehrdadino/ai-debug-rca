@@ -23,9 +23,18 @@ class Settings(BaseSettings):
     ingest_batch_max_size: int = 100
     """Maximum number of traces accepted by POST /v1/traces/batch."""
 
+    ingest_rate_limit_rps: int = 0
+    """Per-tenant ingest requests per second. 0 disables request-rate limiting."""
+
+    ingest_daily_trace_quota: int = 0
+    """Per-tenant accepted trace count per UTC day. 0 disables daily quota."""
+
     api_keys: dict[str, str] = Field(default_factory=dict)
     """Map API key string → tenant_id. When non-empty, requests must authenticate with
     Authorization: Bearer <key> or X-API-Key (X-Tenant-ID is not trusted for tenancy)."""
+
+    admin_token: str = ""
+    """Static admin token for privileged admin APIs (tenant limits management)."""
 
     @field_validator("api_keys", mode="before")
     @classmethod

@@ -587,10 +587,12 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 - Python FastAPI backend: `POST /v1/traces`, `POST /v1/traces/batch`, `GET` list (optional **`environment`** + **`started_at_from` / `started_at_to`** on run time) / detail / diagnosis, SQLite + `ingest_jobs` durable backlog, rule-based `DiagnosisRecord`, example `scripts/`.
 - **Tenant auth (production path):** optional **`RCA_API_KEYS`** JSON map → `tenant_id`; clients use **`Authorization: Bearer`** or **`X-API-Key`**; with keys unset, dev uses **`X-Tenant-ID`** only.
 - **Composite uniqueness:** **`UNIQUE (tenant_id, environment, trace_id)`** on **`traces`**, **`diagnoses`**, **`ingest_jobs`** (named constraints `uq_traces_tenant_env_trace`, `uq_diagnoses_tenant_env_trace`, `uq_ingest_jobs_tenant_env_trace`). The same `trace_id` UUID may exist for **different** tenants or environments; duplicates **within** the same tenant+environment return **409**.
+- **Rate limits & quotas (initial):** per-tenant ingest request-rate and daily trace quota with **429 + Retry-After** on `POST /v1/traces` and `/v1/traces/batch` (current implementation is in-process; distributed limiter backend remains a scale task).
+- **Tenant limit management (initial):** admin-only APIs (`/v1/admin/tenants/{tenant_id}/limits`) persist per-tenant policies in `tenant_limits`; ingest enforcement resolves tenant override first, then global defaults.
 
 ### Near-term (product + trust)
 
-1. **Rate limits & quotas** — per-tenant RPS, batch size, daily volume; return 429 with retry hints.
+1. **JWT auth option** — bearer tokens mapping to `tenant_id` where static API keys are insufficient; keep server-issued tenant binding semantics.
 
 ### Data & scale
 
@@ -598,23 +600,24 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 3. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path.
 4. **External queue (optional)** — SQS / Redis / Pub/Sub when multi-worker or cross-region; DB backlog can remain dev fallback.
 5. **Migrations** — Alembic (or equivalent) instead of only `create_all` (today: `create_all` does not alter existing SQLite files; delete local `data/*.db` or apply a migration after schema changes).
+6. **Distributed rate limits / quotas** — shared backend (Redis or DB counters) so 429 behavior stays correct across multiple API instances.
 
 ### Product surface
 
-6. **Web UI** — React + trace graph + timeline + failure-first list; consumes public APIs only.
-7. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
-8. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
+7. **Web UI** — React + trace graph + timeline + failure-first list; consumes public APIs only.
+8. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
+9. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
 
 ### Ops & enterprise
 
-9. **Observability** — OpenTelemetry on our own API/workers.
-10. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
-11. **Webhooks / export** — after hypothesis quality is credible.
+10. **Observability** — OpenTelemetry on our own API/workers.
+11. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
+12. **Webhooks / export** — after hypothesis quality is credible.
 
 ### GTM
 
-12. **Design partner brief** + **90-day TTPC** measurement loop.
-13. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
+13. **Design partner brief** + **90-day TTPC** measurement loop.
+14. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
 
 ---
 

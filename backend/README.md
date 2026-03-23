@@ -40,7 +40,10 @@ Use **`python3 -m uvicorn`** so the same interpreter that has FastAPI/uvicorn is
 | `RCA_INGEST_SYNC` | `0` (false) | If `1` / `true`, `POST /v1/traces` writes in the request and returns **201**. If false, traces are first persisted to the `ingest_jobs` backlog and API returns **202**; worker drains backlog to `traces`. |
 | `RCA_INGEST_QUEUE_MAXSIZE` | `10000` | Max backlog row count (`ingest_jobs`) before API returns **503** |
 | `RCA_INGEST_BATCH_MAX_SIZE` | `100` | Max items accepted by `POST /v1/traces/batch` |
+| `RCA_INGEST_RATE_LIMIT_RPS` | `0` (disabled) | Per-tenant ingest request limit (requests/second). When exceeded, API returns **429** with `Retry-After`. |
+| `RCA_INGEST_DAILY_TRACE_QUOTA` | `0` (disabled) | Per-tenant ingest quota (trace count/day UTC). Applied to single and batch ingest. Exceeding returns **429** with `Retry-After`. |
 | `RCA_API_KEYS` | *(empty)* | JSON object mapping API key → `tenant_id`, e.g. `{"sk_live_xxx":"org_123"}`. When set, clients must send **`Authorization: Bearer <key>`** or **`X-API-Key`**; **`X-Tenant-ID` is not used for auth** (body `tenant_id` must still match the resolved tenant). When empty, local/dev behavior uses **`X-Tenant-ID`** only. |
+| `RCA_ADMIN_TOKEN` | *(empty / disabled)* | Enables admin APIs for per-tenant limits via `X-Admin-Token`. |
 
 For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace, then `GET` it (may need a short delay while worker drains backlog).
 
@@ -49,9 +52,13 @@ For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace
 - Batch ingest: `POST /v1/traces/batch` with body `{ "traces": [...] }` and the same auth headers  
   - **201** when all items are synchronously accepted, **202** when all are queued, **207** for mixed outcomes  
   - SDK-friendly item fields: `status`, `http_status`, optional `error_code`, optional `detail`
+- Rate/quota failures return **429** with `Retry-After` and a retry hint in `detail`.
 - List: `GET /v1/traces?limit=&offset=&status=&environment=&started_at_from=&started_at_to=` — optional filters; time bounds are **inclusive** on **`started_at`** (run time), ISO-8601  
 - Fetch: `GET /v1/traces/{trace_id}?environment=prod|staging|dev|critical` (defaults to `prod`)  
 - Diagnosis (rules v1): `GET /v1/traces/{trace_id}/diagnosis?environment=...` (defaults to `prod`) — primary hypothesis, confidence, evidence
+- Admin limits (when `RCA_ADMIN_TOKEN` is set):
+  - `GET /v1/admin/tenants/{tenant_id}/limits`
+  - `PUT /v1/admin/tenants/{tenant_id}/limits` with `{ "ingest_rate_limit_rps": int>=0, "ingest_daily_trace_quota": int>=0 }`
 
 ## Tests
 
@@ -67,10 +74,12 @@ After **SQLAlchemy model / constraint changes**, remove the local DB file once s
 
 - **`UNIQUE (tenant_id, environment, trace_id)`** on `traces`, `diagnoses`, and `ingest_jobs` — same UUID may exist under different tenants or environments; **409** if the triple collides for the authenticated tenant.
 - Environment is a first-class dimension: `prod|staging|dev|critical` (default `prod`).
+- Current rate limiter is **in-process** (per API process). For multi-instance deployments, move rate/quota state to shared storage (e.g. Redis/Postgres).
+- Per-tenant policy overrides are persisted in `tenant_limits` and applied before global defaults.
 
 ## Next implementation steps (see `plan.md` §19)
 
-1. **Rate limits & quotas** — per-tenant RPS, batch size, daily volume; 429 + retry hints.  
-2. **PostgreSQL** + object storage when moving off single-file SQLite for staging/prod.  
-3. **Alembic** (or equivalent) for schema evolution.  
+1. **PostgreSQL** + object storage when moving off single-file SQLite for staging/prod.  
+2. **Alembic** (or equivalent) for schema evolution.  
+3. **Distributed rate-limiter backend** (Redis/Postgres counters) for multi-instance API nodes.  
 4. **Python SDK**, **Web UI**, **LLM explainer** — as in `plan.md`.

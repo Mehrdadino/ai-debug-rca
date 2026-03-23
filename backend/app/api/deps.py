@@ -52,5 +52,14 @@ def get_tenant_id(
     return _tenant_from_header(x_tenant_id)
 
 
+def require_admin_token(
+    x_admin_token: Annotated[Optional[str], Header(alias="X-Admin-Token")] = None,
+) -> None:
+    if not settings.admin_token:
+        raise HTTPException(status_code=503, detail="admin API is disabled")
+    if x_admin_token is None or x_admin_token.strip() != settings.admin_token:
+        raise HTTPException(status_code=401, detail="invalid admin token")
+
+
 # Backwards-compatible name for modules that depended on the old helper.
 require_tenant_id = get_tenant_id

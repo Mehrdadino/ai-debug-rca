@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.routes import health, traces
+from app.api.routes import admin_limits, health, traces
 from app.config import settings
 from app.db.engine import close_db, init_db
 from app.services.ingest_worker import start_ingest_worker, stop_ingest_worker
@@ -27,6 +27,7 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(traces.router)
+app.include_router(admin_limits.router)
 
 
 @app.get("/")

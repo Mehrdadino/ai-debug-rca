@@ -81,3 +81,22 @@ class IngestJobRecord(Base):
         insert_default=lambda: datetime.now(timezone.utc),
         index=True,
     )
+
+
+class TenantLimitRecord(Base):
+    """Per-tenant ingest policy controlled by admin APIs."""
+
+    __tablename__ = "tenant_limits"
+
+    tenant_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    ingest_rate_limit_rps: Mapped[int] = mapped_column(insert_default=0)
+    ingest_daily_trace_quota: Mapped[int] = mapped_column(insert_default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        insert_default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        insert_default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )

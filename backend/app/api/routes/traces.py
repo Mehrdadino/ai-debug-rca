@@ -16,6 +16,7 @@ from app.db.models import TraceRecord
 from app.models.diagnosis import Diagnosis
 from app.models.trace import Trace, TraceEnvironment, TraceStatus
 from app.repositories.diagnosis import get_diagnosis_for_trace
+from app.repositories.tenant_limits import get_tenant_limits
 from app.repositories.traces import (
     TraceConflictError,
     get_trace_by_id,
@@ -29,6 +30,7 @@ from app.services.ingest_worker import (
     enqueue_trace,
 )
 from app.services.normalization import normalize_trace
+from app.services.rate_limits import resolve_effective_limits, tenant_ingest_limiter
 
 router = APIRouter(prefix="/v1/traces", tags=["traces"])
 
@@ -36,6 +38,31 @@ router = APIRouter(prefix="/v1/traces", tags=["traces"])
 async def db_session() -> AsyncSession:
     async with get_session() as session:
         yield session
+
+
+async def _enforce_ingest_limits(session: AsyncSession, tenant_id: str, traces: int) -> None:
+    configured = await get_tenant_limits(session, tenant_id)
+    effective = resolve_effective_limits(configured)
+    result = tenant_ingest_limiter.check_and_consume(
+        tenant_id=tenant_id,
+        traces=traces,
+        rps_limit=effective.ingest_rate_limit_rps,
+        daily_quota=effective.ingest_daily_trace_quota,
+    )
+    if result.allowed:
+        return
+    retry_headers = {"Retry-After": str(result.retry_after_seconds)}
+    if result.reason == "rps_limit_exceeded":
+        detail = (
+            "ingest rate limit exceeded for this tenant; retry later "
+            f"(retry_after_seconds={result.retry_after_seconds})"
+        )
+    else:
+        detail = (
+            "daily ingest trace quota exceeded for this tenant; retry later "
+            f"(retry_after_seconds={result.retry_after_seconds})"
+        )
+    raise HTTPException(status_code=429, detail=detail, headers=retry_headers)
 
 
 class IngestTraceResponse(BaseModel):
@@ -240,6 +267,7 @@ async def ingest_trace(
     tenant_id: str = Depends(get_tenant_id),
     session: AsyncSession = Depends(db_session),
 ) -> IngestTraceResponse:
+    await _enforce_ingest_limits(session, tenant_id, traces=1)
     result = await _ingest_one_trace(body, tenant_id, session)
     response.status_code = 201 if result.status == "accepted" else 202
     return result
@@ -260,6 +288,7 @@ async def ingest_traces_batch(
             status_code=400,
             detail=f"batch too large: max {settings.ingest_batch_max_size}",
         )
+    await _enforce_ingest_limits(session, tenant_id, traces=total)
 
     items: list[BatchIngestItemResult] = []
     accepted = queued = conflicts = invalid = queue_full = 0
