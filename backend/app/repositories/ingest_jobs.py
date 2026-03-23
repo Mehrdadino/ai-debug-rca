@@ -11,7 +11,7 @@ from app.models.trace import Trace
 
 
 class IngestJobConflictError(Exception):
-    """trace_id already exists in ingest backlog."""
+    """(tenant_id, environment, trace_id) already exists in ingest backlog."""
 
 
 async def queued_jobs_count(session: AsyncSession) -> int:
@@ -24,6 +24,7 @@ async def enqueue_ingest_job(session: AsyncSession, trace: Trace) -> IngestJobRe
     row = IngestJobRecord(
         trace_id=str(trace.trace_id),
         tenant_id=trace.tenant_id,
+        environment=trace.environment.value,
         payload=trace.model_dump(mode="json"),
     )
     session.add(row)

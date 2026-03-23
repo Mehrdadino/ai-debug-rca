@@ -49,9 +49,9 @@ For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace
 - Batch ingest: `POST /v1/traces/batch` with body `{ "traces": [...] }` and the same auth headers  
   - **201** when all items are synchronously accepted, **202** when all are queued, **207** for mixed outcomes  
   - SDK-friendly item fields: `status`, `http_status`, optional `error_code`, optional `detail`
-- List: `GET /v1/traces?limit=&offset=&status=&started_at_from=&started_at_to=` — optional **inclusive** time bounds on **`started_at`** (run time), ISO-8601; omit both for no time filter  
-- Fetch: `GET /v1/traces/{trace_id}` with the same auth  
-- Diagnosis (rules v1): `GET /v1/traces/{trace_id}/diagnosis` — primary hypothesis, confidence, evidence (written when the trace is stored)
+- List: `GET /v1/traces?limit=&offset=&status=&environment=&started_at_from=&started_at_to=` — optional filters; time bounds are **inclusive** on **`started_at`** (run time), ISO-8601  
+- Fetch: `GET /v1/traces/{trace_id}?environment=prod|staging|dev|critical` (defaults to `prod`)  
+- Diagnosis (rules v1): `GET /v1/traces/{trace_id}/diagnosis?environment=...` (defaults to `prod`) — primary hypothesis, confidence, evidence
 
 ## Tests
 
@@ -61,9 +61,16 @@ export PYTHONPATH=.
 pytest -v
 ```
 
-## Next implementation steps (see `plan.md`)
+After **SQLAlchemy model / constraint changes**, remove the local DB file once so `create_all` builds fresh tables (e.g. `rm -f data/pytest.db data/app.db` from `backend/`).
 
-1. **Composite uniqueness** — DB constraint on `(tenant_id, trace_id)` across `traces`, `diagnoses`, `ingest_jobs`.  
-2. **External durable queue** (SQS / Redis) + multi-worker scaling; keep DB backlog as local fallback.  
-3. **Postgres** + object storage for blobs; keep SQLite for tests.  
-4. **LLM explainer** (optional) over structured `Diagnosis` + more rules / tunable thresholds.
+## Data model notes
+
+- **`UNIQUE (tenant_id, environment, trace_id)`** on `traces`, `diagnoses`, and `ingest_jobs` — same UUID may exist under different tenants or environments; **409** if the triple collides for the authenticated tenant.
+- Environment is a first-class dimension: `prod|staging|dev|critical` (default `prod`).
+
+## Next implementation steps (see `plan.md` §19)
+
+1. **Rate limits & quotas** — per-tenant RPS, batch size, daily volume; 429 + retry hints.  
+2. **PostgreSQL** + object storage when moving off single-file SQLite for staging/prod.  
+3. **Alembic** (or equivalent) for schema evolution.  
+4. **Python SDK**, **Web UI**, **LLM explainer** — as in `plan.md`.

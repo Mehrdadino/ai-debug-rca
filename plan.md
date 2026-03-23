@@ -205,6 +205,7 @@ Adapters are a **product surface**: each adapter is a milestone, not a vague pro
 
 - **One `POST` per logical pipeline run** when the run **completes** (success or failure): send the **full execution graph** in one payload when possible.
 - If the pipeline **stops early** (crash, timeout, kill), send a **partial trace** as soon as it is useful: whatever steps exist so far, with `status: "partial"` or `"error"` as appropriate, plus error context on the last step. This is **recommended** for debugging; it is not mandatory for every failure (e.g. ultra-low-level crashes may send nothing).
+- Include an `environment` dimension per trace (`prod` / `staging` / `dev` / `critical`; default `prod`) so the same tenant can isolate investigation views and retention policy by environment without separate API surfaces.
 
 **Why not one POST per step (for now)?**
 
@@ -250,7 +251,7 @@ At higher scale: **materialized summaries** (per trace rollups) in OLTP or colum
 | **OLTP / analytics DB** | Fast filters, dashboards, trace lists | Normalized **summary rows** + step index / hot fields |
 | **Object storage** | Cheap full payload, replay, audit | Raw or normalized **full** trace blobs |
 
-**Index**: `trace_id`, `tenant_id`, time range, `status`, `step_types`, error flags, optional `model`, latency aggregates, **severity / hypothesis flags** (once diagnosis exists).
+**Index**: `trace_id`, `tenant_id`, `environment`, time range, `status`, `step_types`, error flags, optional `model`, latency aggregates, **severity / hypothesis flags** (once diagnosis exists).
 
 ### 8.4 Integration & export (success enablers)
 
@@ -506,7 +507,7 @@ Single **coherent** stack for Phase 1–3 (speed to proof, one primary language 
 
 **Not required for MVP.** Introduce when **table size**, **vacuum/IO**, or **retention drops** justify operational complexity.
 
-**Recommendation:** use **`PARTITION BY HASH (tenant_id)`** with a **fixed modulus** (e.g. **32 or 64** partitions)—not **`LIST (tenant_id)`** per customer. **Why:** tenant count can grow very large; **one partition per tenant** becomes unmanageable. **HASH** keeps a **bounded** partition count, still aligns with **tenant-scoped queries**, and combines with **B-tree indexes** such as `(tenant_id, started_at DESC)` for list/time-window patterns.
+**Recommendation:** use **`PARTITION BY HASH (tenant_id)`** with a **fixed modulus** (e.g. **32 or 64** partitions)—not **`LIST (tenant_id)`** per customer. **Why:** tenant count can grow very large; **one partition per tenant** becomes unmanageable. **HASH** keeps a **bounded** partition count, still aligns with **tenant-scoped queries**, and combines with **B-tree indexes** such as `(tenant_id, environment, started_at DESC)` for list/time-window patterns.
 
 **Optional later:** **subpartition by time** (e.g. monthly `RANGE` on `started_at` or `ingested_at`) under each hash bucket for TTL-style drops—only when measured.
 
@@ -583,37 +584,37 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 
 ### Already in repo (baseline)
 
-- Python FastAPI backend: `POST /v1/traces`, `POST /v1/traces/batch`, `GET` list (optional **`started_at_from` / `started_at_to`** on run time) / detail / diagnosis, SQLite + `ingest_jobs` durable backlog, rule-based `DiagnosisRecord`, optional **API key → tenant** auth, example `scripts/`.
+- Python FastAPI backend: `POST /v1/traces`, `POST /v1/traces/batch`, `GET` list (optional **`environment`** + **`started_at_from` / `started_at_to`** on run time) / detail / diagnosis, SQLite + `ingest_jobs` durable backlog, rule-based `DiagnosisRecord`, example `scripts/`.
+- **Tenant auth (production path):** optional **`RCA_API_KEYS`** JSON map → `tenant_id`; clients use **`Authorization: Bearer`** or **`X-API-Key`**; with keys unset, dev uses **`X-Tenant-ID`** only.
+- **Composite uniqueness:** **`UNIQUE (tenant_id, environment, trace_id)`** on **`traces`**, **`diagnoses`**, **`ingest_jobs`** (named constraints `uq_traces_tenant_env_trace`, `uq_diagnoses_tenant_env_trace`, `uq_ingest_jobs_tenant_env_trace`). The same `trace_id` UUID may exist for **different** tenants or environments; duplicates **within** the same tenant+environment return **409**.
 
 ### Near-term (product + trust)
 
-1. **Server-issued tenant** — API keys or JWT mapping to `tenant_id`; stop trusting raw `X-Tenant-ID` for production.
-2. **Composite uniqueness** — DB constraint/index on `(tenant_id, trace_id)` (and align `ingest_jobs` + `traces` + `diagnoses`).
-3. **Rate limits & quotas** — per-tenant RPS, batch size, daily volume; return 429 with retry hints.
+1. **Rate limits & quotas** — per-tenant RPS, batch size, daily volume; return 429 with retry hints.
 
 ### Data & scale
 
-4. **PostgreSQL** — migrate from SQLite for dev/staging/prod; keep SQLite for fast local tests.
-5. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path.
-6. **External queue (optional)** — SQS / Redis / Pub/Sub when multi-worker or cross-region; DB backlog can remain dev fallback.
-7. **Migrations** — Alembic (or equivalent) instead of only `create_all`.
+2. **PostgreSQL** — migrate from SQLite for dev/staging/prod; keep SQLite for fast local tests.
+3. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path.
+4. **External queue (optional)** — SQS / Redis / Pub/Sub when multi-worker or cross-region; DB backlog can remain dev fallback.
+5. **Migrations** — Alembic (or equivalent) instead of only `create_all` (today: `create_all` does not alter existing SQLite files; delete local `data/*.db` or apply a migration after schema changes).
 
 ### Product surface
 
-8. **Web UI** — React + trace graph + timeline + failure-first list; consumes public APIs only.
-9. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
-10. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
+6. **Web UI** — React + trace graph + timeline + failure-first list; consumes public APIs only.
+7. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
+8. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
 
 ### Ops & enterprise
 
-11. **Observability** — OpenTelemetry on our own API/workers.
-12. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
-13. **Webhooks / export** — after hypothesis quality is credible.
+9. **Observability** — OpenTelemetry on our own API/workers.
+10. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
+11. **Webhooks / export** — after hypothesis quality is credible.
 
 ### GTM
 
-14. **Design partner brief** + **90-day TTPC** measurement loop.
-15. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
+12. **Design partner brief** + **90-day TTPC** measurement loop.
+13. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
 
 ---
 

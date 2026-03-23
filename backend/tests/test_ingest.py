@@ -87,6 +87,62 @@ def test_duplicate_trace_id(client: TestClient) -> None:
     assert client.post("/v1/traces", json=body, headers=h).status_code == 201
     r2 = client.post("/v1/traces", json=body, headers=h)
     assert r2.status_code == 409
+    assert "this tenant" in r2.json()["detail"]
+
+
+def test_same_trace_id_allowed_across_tenants(client: TestClient) -> None:
+    """Uniqueness is (tenant_id, trace_id); same UUID may exist for different tenants."""
+    tid = uuid.uuid4()
+    base = {
+        "schema_version": "1.0",
+        "trace_id": str(tid),
+        "started_at": "2025-01-15T10:00:00Z",
+        "status": "success",
+        "steps": [],
+        "edges": [],
+    }
+    r_a = client.post(
+        "/v1/traces",
+        json={**base, "tenant_id": "org_a"},
+        headers={"X-Tenant-ID": "org_a"},
+    )
+    r_b = client.post(
+        "/v1/traces",
+        json={**base, "tenant_id": "org_b"},
+        headers={"X-Tenant-ID": "org_b"},
+    )
+    assert r_a.status_code == 201
+    assert r_b.status_code == 201
+    ga = client.get(f"/v1/traces/{tid}", headers={"X-Tenant-ID": "org_a"})
+    gb = client.get(f"/v1/traces/{tid}", headers={"X-Tenant-ID": "org_b"})
+    assert ga.json()["tenant_id"] == "org_a"
+    assert gb.json()["tenant_id"] == "org_b"
+
+
+def test_same_trace_id_allowed_across_environments(client: TestClient) -> None:
+    """Uniqueness includes environment: same trace_id can exist in prod/staging."""
+    tid = uuid.uuid4()
+    base = {
+        "schema_version": "1.0",
+        "trace_id": str(tid),
+        "tenant_id": "org_demo",
+        "started_at": "2025-01-15T10:00:00Z",
+        "status": "success",
+        "steps": [],
+        "edges": [],
+    }
+    h = {"X-Tenant-ID": "org_demo"}
+    r_prod = client.post("/v1/traces", json={**base, "environment": "prod"}, headers=h)
+    r_stg = client.post("/v1/traces", json={**base, "environment": "staging"}, headers=h)
+    assert r_prod.status_code == 201
+    assert r_stg.status_code == 201
+
+    g_default = client.get(f"/v1/traces/{tid}", headers=h)
+    g_stg = client.get(f"/v1/traces/{tid}", headers=h, params={"environment": "staging"})
+    assert g_default.status_code == 200
+    assert g_default.json()["environment"] == "prod"
+    assert g_stg.status_code == 200
+    assert g_stg.json()["environment"] == "staging"
 
 
 def test_validation_duplicate_step_ids(client: TestClient) -> None:

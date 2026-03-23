@@ -38,6 +38,7 @@ def test_list_traces_pagination_and_filter(client: TestClient) -> None:
     assert data["has_more"] is True
     assert len(data["items"]) == 2
     assert data["items"][0]["step_count"] == 1
+    assert data["items"][0]["environment"] == "prod"
 
     err_only = client.get("/v1/traces", headers=h, params={"status": "error"})
     assert err_only.status_code == 200
@@ -102,3 +103,25 @@ def test_list_traces_tenant_isolation(client: TestClient) -> None:
     r = client.get("/v1/traces", headers={"X-Tenant-ID": "org_b"})
     assert r.status_code == 200
     assert r.json()["items"] == []
+
+
+def test_list_traces_environment_filter(client: TestClient) -> None:
+    h = {"X-Tenant-ID": "org_env"}
+    tid_prod = uuid.uuid4()
+    tid_stg = uuid.uuid4()
+    client.post(
+        "/v1/traces",
+        json={**_minimal_trace(tid_prod, "org_env"), "environment": "prod"},
+        headers=h,
+    )
+    client.post(
+        "/v1/traces",
+        json={**_minimal_trace(tid_stg, "org_env"), "environment": "staging"},
+        headers=h,
+    )
+    r = client.get("/v1/traces", headers=h, params={"environment": "staging"})
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["trace_id"] == str(tid_stg)
+    assert items[0]["environment"] == "staging"

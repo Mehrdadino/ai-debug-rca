@@ -14,6 +14,13 @@ class TraceStatus(str, Enum):
     PARTIAL = "partial"
 
 
+class TraceEnvironment(str, Enum):
+    PROD = "prod"
+    STAGING = "staging"
+    DEV = "dev"
+    CRITICAL = "critical"
+
+
 class StepType(str, Enum):
     RETRIEVAL = "retrieval"
     LLM_CALL = "llm_call"
@@ -54,6 +61,7 @@ class Trace(BaseModel):
     schema_version: str = Field(default="1.0", pattern=r"^\d+\.\d+$")
     trace_id: UUID
     tenant_id: str = Field(..., min_length=1, max_length=256)
+    environment: TraceEnvironment = TraceEnvironment.PROD
     started_at: datetime
     ended_at: Optional[datetime] = None
     status: TraceStatus

@@ -14,7 +14,7 @@ from app.services.rules_engine import evaluate_trace
 
 
 class TraceConflictError(Exception):
-    """trace_id already exists."""
+    """(tenant_id, environment, trace_id) already exists."""
 
 
 async def insert_trace(session: AsyncSession, trace: Trace) -> TraceRecord:
@@ -22,6 +22,7 @@ async def insert_trace(session: AsyncSession, trace: Trace) -> TraceRecord:
     row = TraceRecord(
         trace_id=str(trace.trace_id),
         tenant_id=trace.tenant_id,
+        environment=trace.environment.value,
         status=trace.status.value,
         started_at=trace.started_at,
         ended_at=trace.ended_at,
@@ -33,6 +34,7 @@ async def insert_trace(session: AsyncSession, trace: Trace) -> TraceRecord:
         DiagnosisRecord(
             trace_id=str(trace.trace_id),
             tenant_id=trace.tenant_id,
+            environment=trace.environment.value,
             payload=diagnosis.model_dump(mode="json"),
         )
     )
@@ -46,18 +48,25 @@ async def insert_trace(session: AsyncSession, trace: Trace) -> TraceRecord:
 
 
 async def get_trace_by_id(
-    session: AsyncSession, tenant_id: str, trace_id: UUID
+    session: AsyncSession,
+    tenant_id: str,
+    trace_id: UUID,
+    environment: str = "prod",
 ) -> Optional[TraceRecord]:
     q = select(TraceRecord).where(
         TraceRecord.trace_id == str(trace_id),
         TraceRecord.tenant_id == tenant_id,
+        TraceRecord.environment == environment,
     )
     result = await session.execute(q)
     return result.scalar_one_or_none()
 
 
 async def trace_exists(
-    session: AsyncSession, tenant_id: str, trace_id: UUID
+    session: AsyncSession,
+    tenant_id: str,
+    trace_id: UUID,
+    environment: str = "prod",
 ) -> bool:
     q = (
         select(func.count())
@@ -65,6 +74,7 @@ async def trace_exists(
         .where(
             TraceRecord.trace_id == str(trace_id),
             TraceRecord.tenant_id == tenant_id,
+            TraceRecord.environment == environment,
         )
     )
     result = await session.execute(q)
@@ -76,6 +86,7 @@ async def list_traces(
     session: AsyncSession,
     tenant_id: str,
     *,
+    environment: Optional[str] = None,
     status: Optional[str] = None,
     started_at_from: Optional[datetime] = None,
     started_at_to: Optional[datetime] = None,
@@ -83,6 +94,8 @@ async def list_traces(
     offset: int = 0,
 ) -> list[TraceRecord]:
     q = select(TraceRecord).where(TraceRecord.tenant_id == tenant_id)
+    if environment is not None:
+        q = q.where(TraceRecord.environment == environment)
     if status is not None:
         q = q.where(TraceRecord.status == status)
     if started_at_from is not None:

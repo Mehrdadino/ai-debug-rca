@@ -60,3 +60,29 @@ def test_diagnosis_no_rules(client: TestClient) -> None:
     d = client.get(f"/v1/traces/{tid}/diagnosis", headers=h).json()
     assert d["primary_hypothesis"] == "no_rules_fired"
     assert d["evidence"] == []
+
+
+def test_diagnosis_environment_lookup(client: TestClient) -> None:
+    tid = uuid.uuid4()
+    base = {
+        "schema_version": "1.0",
+        "trace_id": str(tid),
+        "tenant_id": "org_x",
+        "started_at": "2025-01-15T10:00:00Z",
+        "status": "success",
+        "steps": [{"step_id": "s1", "type": "retrieval", "input": {}, "output": {}}],
+        "edges": [],
+    }
+    h = {"X-Tenant-ID": "org_x"}
+    assert client.post("/v1/traces", json={**base, "environment": "staging"}, headers=h).status_code == 201
+    assert (
+        client.get(f"/v1/traces/{tid}/diagnosis", headers=h).status_code == 404
+    )  # default env=prod
+    assert (
+        client.get(
+            f"/v1/traces/{tid}/diagnosis",
+            headers=h,
+            params={"environment": "staging"},
+        ).status_code
+        == 200
+    )
