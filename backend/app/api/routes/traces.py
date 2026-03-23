@@ -21,7 +21,11 @@ from app.repositories.traces import (
     list_traces,
     trace_exists,
 )
-from app.services.ingest_worker import IngestQueueFullError, enqueue_trace
+from app.services.ingest_worker import (
+    IngestQueueFullError,
+    IngestTraceConflictError,
+    enqueue_trace,
+)
 from app.services.normalization import normalize_trace
 
 router = APIRouter(prefix="/v1/traces", tags=["traces"])
@@ -147,6 +151,11 @@ async def ingest_trace(
 
     try:
         await enqueue_trace(normalized)
+    except IngestTraceConflictError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"trace_id {body.trace_id} already exists",
+        ) from None
     except IngestQueueFullError:
         raise HTTPException(
             status_code=503,

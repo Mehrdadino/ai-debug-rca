@@ -257,6 +257,11 @@ Normalized trace
 
 **Anti-pattern**: Three separate “verdicts” (rules vs anomaly vs LLM) shown as equals—**one primary hypothesis**, everything else is **detail**.
 
+**Write-heavy optimization rule**:
+- Keep ingest path **cheap and deterministic** (validation + lightweight rule diagnosis).
+- Move expensive analysis (LLM narratives, deep anomaly, embeddings, cross-trace mining) to **read-time on demand** or **scheduled batch jobs**.
+- Never block core ingest acceptance on optional heavy inference.
+
 ### 8.6 Security & tenancy (architectural)
 
 - **Tenant ID** on every row and blob prefix; **no cross-tenant queries** at the application layer (defense in depth with infra isolation as you grow).
@@ -304,7 +309,7 @@ As in §8.3; implement **blob + index** before fancy query features.
 |-------|------|-----------|
 | **Rule-based detection** | Deterministic signals | **Ship first**: thresholds, empty retrieval, tool errors, truncation flags |
 | **Scoring / ranking** | Combine rules into **primary hypothesis** | Simple weighted score; avoid opaque ML stack early |
-| **LLM-assisted explanation** | Natural language over **structured** evidence | Template- or schema-guided; cite step IDs |
+| **LLM-assisted explanation** | Natural language over **structured** evidence | **On-demand or batched**; template- or schema-guided; cite step IDs |
 | **Statistical anomaly** | “Unusual trace” | **Defer** or light z-score on metrics only |
 
 ### Phase F — Trust & enterprise
@@ -338,9 +343,10 @@ As in §8.3; implement **blob + index** before fancy query features.
 3. **Normalization pipeline** + **dual storage** (operational DB + object store for blobs).
 4. **Query APIs** + **UI**: graph + timeline, failure filters.
 5. **Rule engine v1**: small **library of built-in rules** (retrieval quality, tool empty/error, latency spike, truncation).
-6. **Hypothesis + explanation**: primary hypothesis + LLM-generated explanation **bounded** by structured evidence (no free-floating fiction).
-7. **DiagnosisRecord** persistence (hypothesis, confidence, evidence pointers, schema version)—enables feedback and iteration.
-8. **Tenant model + basic RBAC** + **retention** + **redaction hooks**.
+6. **Hypothesis baseline**: persist primary hypothesis + evidence at write time; keep this deterministic and cheap.
+7. **Optional explanation**: LLM-generated narrative runs on-demand (read path) or in batch, always **bounded** by structured evidence.
+8. **DiagnosisRecord** persistence (hypothesis, confidence, evidence pointers, schema version)—enables feedback and iteration.
+9. **Tenant model + basic RBAC** + **retention** + **redaction hooks**.
 
 ### 10.2 MVP explicitly excludes (or stub only)
 
@@ -518,5 +524,6 @@ The product’s **core diagnosis** is **deterministic**: rules over the **normal
 - [ ] Advanced features (replay, semantic search, heavy ML, Kafka) **explicitly phased** after proof.
 - [ ] **Coexistence** and **export** treated as success enablers, not late extras.
 - [ ] **Default technology stack** (§16) agreed; **LLM usage** limited to bounded explainer (§16.2) unless product explicitly expands scope.
+- [ ] Ingest remains write-light; expensive diagnosis paths run on-demand or batch unless metrics justify moving them earlier.
 
 This plan ties **product strategy**, **GTM validation**, **architecture**, and **implementation defaults** (§16) so technology choices map to **interfaces and outcomes**—maximizing the odds of building something **directionally right** in a crowded market.

@@ -1,6 +1,6 @@
 # Backend (Python)
 
-Phase **A/B + diagnosis (v0.3)**: canonical traces, **async ingest queue** (in-process), **list traces**, **rule-based diagnosis** (stored with each trace; `GET .../diagnosis`), SQLite for local dev.
+Phase **A/B + diagnosis (v0.4)**: canonical traces, **async ingest with DB-backed durable backlog** (`ingest_jobs` table), **list traces**, **rule-based diagnosis**, SQLite for local dev.
 
 ## Requirements
 
@@ -37,10 +37,10 @@ Use **`python3 -m uvicorn`** so the same interpreter that has FastAPI/uvicorn is
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `RCA_DATABASE_URL` | `sqlite+aiosqlite:///./data/app.db` | Async SQLAlchemy URL |
-| `RCA_INGEST_SYNC` | `0` (false) | If `1` / `true`, `POST /v1/traces` writes in the request and returns **201**. If false, traces are **queued** and the API returns **202** (worker persists in background). |
-| `RCA_INGEST_QUEUE_MAXSIZE` | `10000` | When ingest is async, queue capacity before **503** |
+| `RCA_INGEST_SYNC` | `0` (false) | If `1` / `true`, `POST /v1/traces` writes in the request and returns **201**. If false, traces are first persisted to the `ingest_jobs` backlog and API returns **202**; worker drains backlog to `traces`. |
+| `RCA_INGEST_QUEUE_MAXSIZE` | `10000` | Max backlog row count (`ingest_jobs`) before API returns **503** |
 
-For local curl testing of the async path, use `export RCA_INGEST_SYNC=0` (or unset), post a trace, then `GET` it (you may need a short delay before the worker flushes the queue on a loaded machine).
+For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace, then `GET` it (may need a short delay while worker drains backlog).
 
 - OpenAPI: http://127.0.0.1:8000/docs  
 - Ingest: `POST /v1/traces` with header `X-Tenant-ID` matching `tenant_id` in the JSON body (**201** if sync ingest, **202** if queued)  
@@ -58,7 +58,7 @@ pytest -v
 
 ## Next implementation steps (see `plan.md`)
 
-1. **Durable queue** (SQS / Redis) before returning 202; keep in-proc for dev.  
+1. **External durable queue** (SQS / Redis) + multi-worker scaling; keep DB backlog as local fallback.  
 2. **Postgres** + object storage for blobs; keep SQLite for tests.  
 3. **API keys / auth** beyond `X-Tenant-ID`.  
 4. **LLM explainer** (optional) over structured `Diagnosis` + more rules / tunable thresholds.

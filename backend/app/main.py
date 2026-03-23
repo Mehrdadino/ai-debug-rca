@@ -20,8 +20,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ai-debug-rca",
-    description="AI debugging & root-cause analysis — ingest, list, rule-based diagnosis (Phase 3)",
-    version="0.3.0",
+    description="AI debugging & root-cause analysis — durable async ingest, list, diagnosis",
+    version="0.4.0",
     lifespan=lifespan,
 )
 

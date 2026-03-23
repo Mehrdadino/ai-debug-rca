@@ -1,4 +1,4 @@
-"""In-process asyncio queue + worker (dev); swap for SQS/Redis later."""
+"""DB-backed ingest worker (durable backlog in ingest_jobs table)."""
 
 from __future__ import annotations
 
@@ -9,37 +9,48 @@ from typing import Optional
 from app.config import settings
 from app.db.engine import get_session
 from app.models.trace import Trace
+from app.repositories.ingest_jobs import (
+    IngestJobConflictError,
+    delete_ingest_job,
+    enqueue_ingest_job,
+    get_next_ingest_job,
+    queued_jobs_count,
+)
 from app.repositories.traces import TraceConflictError, insert_trace
 
 logger = logging.getLogger(__name__)
 
-_queue: Optional[asyncio.Queue[Trace]] = None
 _worker_task: Optional[asyncio.Task[None]] = None
 
 
-def _ensure_queue() -> asyncio.Queue[Trace]:
-    global _queue
-    if _queue is None:
-        _queue = asyncio.Queue(maxsize=settings.ingest_queue_maxsize)
-    return _queue
-
-
 async def enqueue_trace(trace: Trace) -> None:
-    q = _ensure_queue()
-    try:
-        q.put_nowait(trace)
-    except asyncio.QueueFull:
-        raise IngestQueueFullError from None
+    async with get_session() as session:
+        count = await queued_jobs_count(session)
+        if count >= settings.ingest_queue_maxsize:
+            raise IngestQueueFullError from None
+        try:
+            await enqueue_ingest_job(session, trace)
+        except IngestJobConflictError:
+            raise IngestTraceConflictError from None
 
 
 class IngestQueueFullError(Exception):
     """Ingest queue is at capacity."""
 
 
+class IngestTraceConflictError(Exception):
+    """trace_id already present in backlog."""
+
+
 async def _worker_loop() -> None:
-    q = _ensure_queue()
     while True:
-        trace = await q.get()
+        async with get_session() as session:
+            job = await get_next_ingest_job(session)
+        if job is None:
+            await asyncio.sleep(0.2)
+            continue
+
+        trace = Trace.model_validate(job.payload)
         try:
             async with get_session() as session:
                 await insert_trace(session, trace)
@@ -50,20 +61,28 @@ async def _worker_loop() -> None:
         except Exception:
             logger.exception("ingest worker: failed to persist trace_id=%s", trace.trace_id)
         finally:
-            q.task_done()
+            # Remove from backlog after successful insert, or after duplicate conflict.
+            try:
+                async with get_session() as session:
+                    await delete_ingest_job(session, job.id)
+            except Exception:
+                logger.exception(
+                    "ingest worker: failed to delete job id=%s for trace_id=%s",
+                    job.id,
+                    trace.trace_id,
+                )
 
 
 def start_ingest_worker() -> None:
     global _worker_task
     if settings.ingest_sync:
         return
-    _ensure_queue()
     if _worker_task is None or _worker_task.done():
         _worker_task = asyncio.create_task(_worker_loop(), name="ingest-worker")
 
 
 async def stop_ingest_worker() -> None:
-    global _worker_task, _queue
+    global _worker_task
     if _worker_task is not None and not _worker_task.done():
         _worker_task.cancel()
         try:
@@ -71,4 +90,3 @@ async def stop_ingest_worker() -> None:
         except asyncio.CancelledError:
             pass
         _worker_task = None
-    _queue = None
