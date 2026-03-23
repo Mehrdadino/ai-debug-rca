@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     ingest_batch_max_size: int = 100
     """Maximum number of traces accepted by POST /v1/traces/batch."""
 
+    ingest_claim_timeout_seconds: int = 60
+    """Claim lease timeout for processing jobs (stale claims become reclaimable)."""
+
+    ingest_retry_delay_seconds: int = 5
+    """Delay before retrying failed background ingest jobs."""
+
+    ingest_max_attempts: int = 5
+    """Max background attempts before marking ingest job dead."""
+
     ingest_rate_limit_rps: int = 0
     """Per-tenant ingest requests per second. 0 disables request-rate limiting."""
 

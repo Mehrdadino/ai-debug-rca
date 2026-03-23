@@ -51,6 +51,9 @@ Use **`python3 -m uvicorn`** so the same interpreter that has FastAPI/uvicorn is
 | `RCA_INGEST_SYNC` | `0` (false) | If `1` / `true`, `POST /v1/traces` writes in the request and returns **201**. If false, traces are first persisted to the `ingest_jobs` backlog and API returns **202**; worker drains backlog to `traces`. |
 | `RCA_INGEST_QUEUE_MAXSIZE` | `10000` | Max backlog row count (`ingest_jobs`) before API returns **503** |
 | `RCA_INGEST_BATCH_MAX_SIZE` | `100` | Max items accepted by `POST /v1/traces/batch` |
+| `RCA_INGEST_CLAIM_TIMEOUT_SECONDS` | `60` | Background worker claim lease timeout; stale `processing` jobs become reclaimable |
+| `RCA_INGEST_RETRY_DELAY_SECONDS` | `5` | Delay before retrying failed background ingest jobs |
+| `RCA_INGEST_MAX_ATTEMPTS` | `5` | Max background attempts before moving job to `dead` state |
 | `RCA_INGEST_RATE_LIMIT_RPS` | `0` (disabled) | Per-tenant ingest request limit (requests/second). When exceeded, API returns **429** with `Retry-After`. |
 | `RCA_INGEST_DAILY_TRACE_QUOTA` | `0` (disabled) | Per-tenant ingest quota (trace count/day UTC). Applied to single and batch ingest. Exceeding returns **429** with `Retry-After`. |
 | `RCA_API_KEYS` | *(empty)* | JSON object mapping API key → `tenant_id`, e.g. `{"sk_live_xxx":"org_123"}`. When set, clients must send **`Authorization: Bearer <key>`** or **`X-API-Key`**; **`X-Tenant-ID` is not used for auth** (body `tenant_id` must still match the resolved tenant). When empty, local/dev behavior uses **`X-Tenant-ID`** only. |
@@ -97,6 +100,7 @@ python3 -m alembic upgrade head
 - Environment is a first-class dimension: `prod|staging|dev|critical` (default `prod`).
 - Current rate limiter is **in-process** (per API process). For multi-instance deployments, move rate/quota state to shared storage (e.g. Redis/Postgres).
 - Per-tenant policy overrides are persisted in `tenant_limits` and applied before global defaults.
+- Background ingest uses claim/ack/release semantics (Postgres uses `FOR UPDATE SKIP LOCKED`) for safe multi-worker processing.
 
 ## Next implementation steps (see `plan.md` §19)
 

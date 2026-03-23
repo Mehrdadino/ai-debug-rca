@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import JSON, Boolean, DateTime, Index, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -119,6 +119,16 @@ class IngestJobRecord(Base):
     trace_id: Mapped[str] = mapped_column(String(36), index=True)
     tenant_id: Mapped[str] = mapped_column(String(256), index=True)
     environment: Mapped[str] = mapped_column(String(32), index=True, insert_default="prod")
+    status: Mapped[str] = mapped_column(String(32), index=True, insert_default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, insert_default=0)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    claimed_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        insert_default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

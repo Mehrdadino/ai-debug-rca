@@ -1,0 +1,15 @@
+---
+description: Default to distributed-systems assumptions for architecture and implementation
+alwaysApply: true
+---
+
+# Distributed-First Design Defaults
+
+- Assume production runs with multiple app instances and no single-node guarantees.
+- Assume database and queue components are deployed for high availability and may have failover events.
+- Avoid designs that rely on in-memory process-local state for correctness across nodes.
+- Require idempotency for ingest and background processing paths.
+- Prefer atomic claim/ack patterns for shared work queues; avoid naive select-then-delete races.
+- Use explicit consistency and failure-handling semantics (retries, backoff, dead-letter/reconciliation as needed).
+- Keep APIs and schemas forward-compatible for multi-service evolution.
+- Call out single-node shortcuts as local-dev only, never production defaults.
