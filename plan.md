@@ -585,39 +585,39 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 ### Already in repo (baseline)
 
 - Python FastAPI backend: `POST /v1/traces`, `POST /v1/traces/batch`, `GET` list (optional **`environment`** + **`started_at_from` / `started_at_to`** on run time) / detail / diagnosis, SQLite + `ingest_jobs` durable backlog, rule-based `DiagnosisRecord`, example `scripts/`.
-- **Tenant auth (production path):** optional **`RCA_API_KEYS`** JSON map → `tenant_id`; clients use **`Authorization: Bearer`** or **`X-API-Key`**; with keys unset, dev uses **`X-Tenant-ID`** only.
+- **Tenant auth (production path):** optional **`RCA_API_KEYS`** JSON map → `tenant_id`, plus **JWT bearer auth** (`RCA_JWT_*`: secret, algorithm, tenant claim, optional issuer/audience); clients use **`Authorization: Bearer`** or **`X-API-Key`**; with keys/JWT unset, dev uses **`X-Tenant-ID`** only.
 - **Composite uniqueness:** **`UNIQUE (tenant_id, environment, trace_id)`** on **`traces`**, **`diagnoses`**, **`ingest_jobs`** (named constraints `uq_traces_tenant_env_trace`, `uq_diagnoses_tenant_env_trace`, `uq_ingest_jobs_tenant_env_trace`). The same `trace_id` UUID may exist for **different** tenants or environments; duplicates **within** the same tenant+environment return **409**.
 - **Rate limits & quotas (initial):** per-tenant ingest request-rate and daily trace quota with **429 + Retry-After** on `POST /v1/traces` and `/v1/traces/batch` (current implementation is in-process; distributed limiter backend remains a scale task).
 - **Tenant limit management (initial):** admin-only APIs (`/v1/admin/tenants/{tenant_id}/limits`) persist per-tenant policies in `tenant_limits`; ingest enforcement resolves tenant override first, then global defaults.
 - **Migrations (initial):** Alembic is wired with a baseline revision; startup runs `upgrade head` instead of relying only on `create_all`.
+- **Web UI baseline:** React app can connect to API and exercise key flows (settings/auth mode, ingest single/batch, traces list/detail + diagnosis JSON, step queries, admin limits, test-data generation).
 
 ### Near-term (product + trust)
 
-1. **JWT auth option** — bearer tokens mapping to `tenant_id` where static API keys are insufficient; keep server-issued tenant binding semantics.
-2. **Web UI** — React + trace graph + timeline + failure-first list; consumes public APIs only.
-3. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path.
+1. **Web UI visualization depth** — add true trace **graph + timeline** rendering and stronger failure-first workflows on top of the current functional UI; keep public-API-only consumption.
+2. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path.
 
 ### Data & scale
 
-4. **Distributed ingest queue + workers** — move background ingest from DB-backed polling to a distributed queue/consumer model (SQS / Redis Streams / Pub/Sub) for multi-instance safety, retry/DLQ semantics, and cross-region scale; keep DB backlog as local/dev fallback only.
-5. **Distributed rate limits / quotas (Redis)** — use Redis as the shared backend for rate limits and daily quotas so 429 behavior stays correct across multiple API instances.
-6. **PostgreSQL scale hardening** — tenant hash partitioning and operational tuning once measured load justifies it; keep SQLite for fast local tests.
+3. **Distributed ingest queue + workers** — move background ingest from DB-backed polling to a distributed queue/consumer model (SQS / Redis Streams / Pub/Sub) for multi-instance safety, retry/DLQ semantics, and cross-region scale; keep DB backlog as local/dev fallback only.
+4. **Distributed rate limits / quotas (Redis)** — use Redis as the shared backend for rate limits and daily quotas so 429 behavior stays correct across multiple API instances.
+5. **PostgreSQL scale hardening** — tenant hash partitioning and operational tuning once measured load justifies it; keep SQLite for fast local tests.
 
 ### Product surface
 
-7. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
-8. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
+6. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
+7. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
 
 ### Ops & enterprise
 
-9. **Observability** — OpenTelemetry on our own API/workers.
-10. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
-11. **Webhooks / export** — after hypothesis quality is credible.
+8. **Observability** — OpenTelemetry on our own API/workers.
+9. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
+10. **Webhooks / export** — after hypothesis quality is credible.
 
 ### GTM
 
-12. **Design partner brief** + **90-day TTPC** measurement loop.
-13. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
+11. **Design partner brief** + **90-day TTPC** measurement loop.
+12. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
 
 ---
 

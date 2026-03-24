@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type WheelEvent } from 'react'
 import './App.css'
 
 type TabKey = 'settings' | 'ingest' | 'traces' | 'steps' | 'admin' | 'testing'
@@ -33,6 +33,21 @@ type TenantLimits = {
 
 type ApiError = { status: number; detail: string }
 type ConnectionState = 'unknown' | 'connected' | 'disconnected'
+type TraceStep = {
+  step_id: string
+  type: string
+  parent_step_id: string | null
+  error: string | null
+  metadata: Record<string, unknown>
+}
+type TraceEdge = { from: string; to: string }
+type VisualNode = {
+  id: string
+  type: string
+  hasError: boolean
+  x: number
+  y: number
+}
 type PersistedUiState = {
   baseUrl?: string
   tab?: TabKey
@@ -97,6 +112,106 @@ async function parseResponse<T>(res: Response): Promise<T> {
   return payload as T
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+function extractTraceSteps(traceDetail: Record<string, unknown> | null): TraceStep[] {
+  if (!traceDetail) return []
+  const stepsRaw = traceDetail.steps
+  if (!Array.isArray(stepsRaw)) return []
+  const out: TraceStep[] = []
+  for (const raw of stepsRaw) {
+    const rec = asRecord(raw)
+    if (!rec) continue
+    const stepId = String(rec.step_id ?? '').trim()
+    if (!stepId) continue
+    out.push({
+      step_id: stepId,
+      type: String(rec.type ?? 'unknown'),
+      parent_step_id: rec.parent_step_id ? String(rec.parent_step_id) : null,
+      error: rec.error ? String(rec.error) : null,
+      metadata: asRecord(rec.metadata) ?? {},
+    })
+  }
+  return out
+}
+
+function extractTraceEdges(traceDetail: Record<string, unknown> | null, steps: TraceStep[]): TraceEdge[] {
+  const edges: TraceEdge[] = []
+  const seen = new Set<string>()
+  const stepIds = new Set(steps.map((s) => s.step_id))
+  const pushEdge = (from: string, to: string): void => {
+    if (!from || !to || !stepIds.has(from) || !stepIds.has(to)) return
+    const k = `${from}=>${to}`
+    if (seen.has(k)) return
+    seen.add(k)
+    edges.push({ from, to })
+  }
+  for (const s of steps) {
+    if (s.parent_step_id) pushEdge(s.parent_step_id, s.step_id)
+  }
+  const edgesRaw = traceDetail?.edges
+  if (Array.isArray(edgesRaw)) {
+    for (const e of edgesRaw) {
+      const rec = asRecord(e)
+      if (!rec) continue
+      const from = String(rec.from_step_id ?? rec.from ?? rec.source ?? '').trim()
+      const to = String(rec.to_step_id ?? rec.to ?? rec.target ?? '').trim()
+      if (from && to) pushEdge(from, to)
+    }
+  }
+  return edges
+}
+
+function computeNodeDepths(steps: TraceStep[], edges: TraceEdge[]): Map<string, number> {
+  const parents = new Map<string, string[]>()
+  const stepIds = steps.map((s) => s.step_id)
+  for (const id of stepIds) parents.set(id, [])
+  for (const e of edges) {
+    const bucket = parents.get(e.to)
+    if (bucket) bucket.push(e.from)
+  }
+  const memo = new Map<string, number>()
+  const visiting = new Set<string>()
+  const depthOf = (id: string): number => {
+    const cached = memo.get(id)
+    if (cached !== undefined) return cached
+    if (visiting.has(id)) return 0
+    visiting.add(id)
+    const p = parents.get(id) ?? []
+    const depth = p.length ? Math.max(...p.map(depthOf)) + 1 : 0
+    visiting.delete(id)
+    memo.set(id, depth)
+    return depth
+  }
+  for (const id of stepIds) depthOf(id)
+  return memo
+}
+
+function buildVisualNodes(steps: TraceStep[], edges: TraceEdge[]): VisualNode[] {
+  const depths = computeNodeDepths(steps, edges)
+  const rowsByDepth = new Map<number, number>()
+  return steps.map((step) => {
+    const depth = depths.get(step.step_id) ?? 0
+    const row = rowsByDepth.get(depth) ?? 0
+    rowsByDepth.set(depth, row + 1)
+    return {
+      id: step.step_id,
+      type: step.type,
+      hasError: Boolean(step.error),
+      x: 120 + depth * 180,
+      y: 60 + row * 110,
+    }
+  })
+}
+
+function formatLatencyMs(metadata: Record<string, unknown>): string {
+  const raw = metadata.latency_ms
+  const n = typeof raw === 'number' ? raw : Number(raw)
+  return Number.isFinite(n) && n >= 0 ? `${Math.round(n)} ms` : '-'
+}
+
 function App() {
   const [tab, setTab] = useState<TabKey>(() => {
     if (typeof window === 'undefined') return 'traces'
@@ -150,6 +265,20 @@ function App() {
   const [traceEnvironment, setTraceEnvironment] = useState<TraceEnvironment>('prod')
   const [traceDetail, setTraceDetail] = useState<Record<string, unknown> | null>(null)
   const [diagnosis, setDiagnosis] = useState<Record<string, unknown> | null>(null)
+  const [selectedStepId, setSelectedStepId] = useState('')
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [lastPointer, setLastPointer] = useState<{ x: number; y: number } | null>(null)
+  const graphViewportRef = useRef<HTMLDivElement | null>(null)
+  const zoomRef = useRef(1)
+  const panRef = useRef({ x: 0, y: 0 })
+  const panDragRef = useRef<{ active: boolean; startX: number; startY: number; startPanX: number; startPanY: number }>({
+    active: false,
+    startX: 0,
+    startY: 0,
+    startPanX: 0,
+    startPanY: 0,
+  })
 
   const [steps, setSteps] = useState<StepSummary[]>([])
   const [stepsType, setStepsType] = useState('')
@@ -184,6 +313,126 @@ function App() {
     if (apiKey.trim()) return 'API key auth'
     return 'X-Tenant-ID dev auth'
   }, [apiKey, jwtToken])
+
+  const traceSteps = useMemo(() => extractTraceSteps(traceDetail), [traceDetail])
+  const traceEdges = useMemo(() => extractTraceEdges(traceDetail, traceSteps), [traceDetail, traceSteps])
+  const visualNodes = useMemo(() => buildVisualNodes(traceSteps, traceEdges), [traceSteps, traceEdges])
+  const graphCanvas = useMemo(() => {
+    const width = Math.max(680, ...visualNodes.map((n) => n.x + 160))
+    const height = Math.max(240, ...visualNodes.map((n) => n.y + 110))
+    return { width, height }
+  }, [visualNodes])
+  const visualNodeById = useMemo(() => {
+    const m = new Map<string, VisualNode>()
+    for (const n of visualNodes) m.set(n.id, n)
+    return m
+  }, [visualNodes])
+  const selectedStep = useMemo(() => traceSteps.find((s) => s.step_id === selectedStepId) ?? null, [traceSteps, selectedStepId])
+
+  useEffect(() => {
+    if (!traceSteps.length) {
+      setSelectedStepId('')
+      return
+    }
+    setSelectedStepId((prev) => (prev && traceSteps.some((s) => s.step_id === prev) ? prev : traceSteps[0].step_id))
+  }, [traceSteps])
+
+  function centerGraphToFit(): void {
+    const viewport = graphViewportRef.current
+    if (!viewport || !visualNodes.length) return
+    viewport.scrollLeft = 0
+    viewport.scrollTop = 0
+    const vw = Math.max(240, viewport.clientWidth)
+    const vh = Math.max(200, viewport.clientHeight)
+    const pad = 24
+    const scaleX = (vw - pad * 2) / Math.max(1, graphCanvas.width)
+    const scaleY = (vh - pad * 2) / Math.max(1, graphCanvas.height)
+    const fitted = Math.min(scaleX, scaleY)
+    const nextZoom = Math.max(0.45, Math.min(2.4, fitted))
+    const x = (vw - graphCanvas.width * nextZoom) / 2
+    const y = (vh - graphCanvas.height * nextZoom) / 2
+    setZoom(nextZoom)
+    setPan({ x, y })
+  }
+
+  useEffect(() => {
+    if (!visualNodes.length) return
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => centerGraphToFit())
+    })
+    // Fit whenever graph topology changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visualNodes.length, graphCanvas.width, graphCanvas.height])
+
+  useEffect(() => {
+    const viewport = graphViewportRef.current
+    if (!viewport) return
+    const observer = new ResizeObserver(() => centerGraphToFit())
+    observer.observe(viewport)
+    return () => observer.disconnect()
+    // Keep graph centered when viewport size changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visualNodes.length, graphCanvas.width, graphCanvas.height])
+
+  useEffect(() => {
+    zoomRef.current = zoom
+    panRef.current = pan
+  }, [zoom, pan])
+
+  function zoomTo(targetZoom: number, anchor?: { x: number; y: number }): void {
+    const viewport = graphViewportRef.current
+    if (!viewport) return
+    const rect = viewport.getBoundingClientRect()
+    const vx = anchor?.x ?? rect.width / 2
+    const vy = anchor?.y ?? rect.height / 2
+    const graphX = (vx - panRef.current.x) / zoomRef.current
+    const graphY = (vy - panRef.current.y) / zoomRef.current
+    const nextZoom = Math.max(0.45, Math.min(2.4, targetZoom))
+    setZoom(nextZoom)
+    setPan({
+      x: vx - graphX * nextZoom,
+      y: vy - graphY * nextZoom,
+    })
+  }
+
+  function resetViewport(): void {
+    centerGraphToFit()
+  }
+
+  function onGraphWheel(e: WheelEvent<HTMLDivElement>): void {
+    e.preventDefault()
+    e.stopPropagation()
+    const factor = Math.exp(-e.deltaY * 0.0015)
+    const targetZoom = zoomRef.current * factor
+    const rect = e.currentTarget.getBoundingClientRect()
+    zoomTo(targetZoom, { x: e.clientX - rect.left, y: e.clientY - rect.top })
+  }
+
+  function onGraphMouseDown(e: MouseEvent<HTMLDivElement>): void {
+    panDragRef.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startPanX: pan.x,
+      startPanY: pan.y,
+    }
+  }
+
+  function onGraphMouseMove(e: MouseEvent<HTMLDivElement>): void {
+    const rect = e.currentTarget.getBoundingClientRect()
+    setLastPointer({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+    if (!panDragRef.current.active) return
+    const dx = e.clientX - panDragRef.current.startX
+    const dy = e.clientY - panDragRef.current.startY
+    setPan({
+      x: panDragRef.current.startPanX + dx,
+      y: panDragRef.current.startPanY + dy,
+    })
+  }
+
+  function onGraphMouseUp(): void {
+    panDragRef.current.active = false
+  }
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -492,7 +741,7 @@ function App() {
       )}
 
       {tab === 'traces' && (
-        <section className="panel grid-two">
+        <section className="panel grid-two traces-layout">
           <article className="glass card">
             <h3>Trace List</h3>
             <p className="muted">Recent traces loaded: {traceList.length} · API base: {baseUrl}</p>
@@ -545,6 +794,127 @@ function App() {
               >
                 {busyAction === 'trace_detail' ? 'Loading...' : 'Fetch Trace + Diagnosis'}
               </button>
+            </div>
+            <div className="viz-grid">
+              <div className="viz-panel">
+                <h3>Execution Graph</h3>
+                {!traceSteps.length ? (
+                  <p className="muted">Load a trace to render its graph.</p>
+                ) : (
+                  <div>
+                    <div className="graph-toolbar">
+                      <div className="actions">
+                        <button className="secondary" onClick={() => zoomTo(zoom / 1.12, lastPointer ?? undefined)}>Zoom Out</button>
+                        <button className="secondary" onClick={resetViewport}>Reset View</button>
+                        <button className="secondary" onClick={() => zoomTo(zoom * 1.12, lastPointer ?? undefined)}>Zoom In</button>
+                        <span className="muted">Zoom {Math.round(zoom * 100)}%</span>
+                      </div>
+                    </div>
+                    <div
+                      ref={graphViewportRef}
+                      className="graph-wrap"
+                      onWheelCapture={onGraphWheel}
+                      onWheel={onGraphWheel}
+                      onMouseDown={onGraphMouseDown}
+                      onMouseMove={onGraphMouseMove}
+                      onMouseUp={onGraphMouseUp}
+                      onMouseLeave={onGraphMouseUp}
+                    >
+                    <svg
+                      className="trace-graph"
+                      width={graphCanvas.width}
+                      height={graphCanvas.height}
+                      viewBox={`0 0 ${graphCanvas.width} ${graphCanvas.height}`}
+                      role="img"
+                      aria-label="Trace execution graph"
+                    >
+                      <defs>
+                        <marker id="graph-arrow" markerWidth="6" markerHeight="6" refX="5.25" refY="3" orient="auto">
+                          <path d="M 0 0 L 6 3 L 0 6 z" className="graph-arrowhead" />
+                        </marker>
+                      </defs>
+                      <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
+                      {traceEdges.map((e) => {
+                        const from = visualNodeById.get(e.from)
+                        const to = visualNodeById.get(e.to)
+                        if (!from || !to) return null
+                        const x1 = from.x + 80
+                        const y1 = from.y + 24
+                        const x2 = to.x
+                        const y2 = to.y + 24
+                        const cx1 = x1 + Math.max(42, (x2 - x1) * 0.35)
+                        const cx2 = x2 - Math.max(42, (x2 - x1) * 0.35)
+                        return (
+                          <path
+                            key={`${e.from}-${e.to}`}
+                            d={`M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`}
+                            className="graph-edge"
+                            markerEnd="url(#graph-arrow)"
+                          />
+                        )
+                      })}
+                      {visualNodes.map((n) => {
+                        const isActive = selectedStepId === n.id
+                        return (
+                          <g
+                            key={n.id}
+                            onClick={() => setSelectedStepId(n.id)}
+                            className={isActive ? 'graph-node active' : 'graph-node'}
+                          >
+                            <rect
+                              x={n.x}
+                              y={n.y}
+                              width={80}
+                              height={48}
+                              rx={10}
+                              className={n.hasError ? 'graph-node-rect error' : 'graph-node-rect'}
+                            />
+                            <text x={n.x + 8} y={n.y + 20} className="graph-node-id">{n.id}</text>
+                            <text x={n.x + 8} y={n.y + 36} className="graph-node-type">{n.type}</text>
+                          </g>
+                        )
+                      })}
+                      </g>
+                    </svg>
+                  </div>
+                  </div>
+                )}
+              </div>
+              <div className="viz-panel">
+                <h3>Step Timeline</h3>
+                {!traceSteps.length ? (
+                  <p className="muted">No steps yet.</p>
+                ) : (
+                  <ol className="timeline">
+                    {traceSteps.map((step, idx) => {
+                      const active = step.step_id === selectedStepId
+                      return (
+                        <li
+                          key={step.step_id}
+                          className={active ? 'timeline-item active' : 'timeline-item'}
+                          onClick={() => setSelectedStepId(step.step_id)}
+                        >
+                          <div className="timeline-index">{idx + 1}</div>
+                          <div>
+                            <div className="timeline-top">
+                              <strong>{step.step_id}</strong>
+                              <span>{step.type}</span>
+                              <span>{formatLatencyMs(step.metadata)}</span>
+                            </div>
+                            {step.error && <div className="timeline-error">{step.error}</div>}
+                          </div>
+                        </li>
+                      )
+                    })}
+                  </ol>
+                )}
+                {selectedStep && (
+                  <div className="selected-step">
+                    <h3>Selected Step</h3>
+                    <pre>{JSON.stringify(selectedStep, null, 2)}</pre>
+                  </div>
+                )}
+              </div>
             </div>
             <h3>Trace JSON</h3>
             <pre>{traceDetail ? JSON.stringify(traceDetail, null, 2) : 'No trace loaded yet.'}</pre>
