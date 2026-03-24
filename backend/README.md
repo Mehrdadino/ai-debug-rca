@@ -30,6 +30,25 @@ mkdir -p data
 python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+If your macOS dev shell occasionally leaves a stale process bound to `8000`, use the safe launcher:
+
+```bash
+cd backend
+./run_api.sh
+```
+
+Optional overrides:
+
+```bash
+HOST=127.0.0.1 PORT=8000 LOG_LEVEL=debug ./run_api.sh
+```
+
+`run_api.sh` uses `--loop asyncio` by default (`LOOP_IMPL=asyncio`) for better macOS stability. You can override with `LOOP_IMPL=auto` if needed.
+It also auto-picks a bootable DB in dev:
+- If `RCA_DATABASE_URL` is unset, it uses local SQLite.
+- If `RCA_DATABASE_URL` points to Postgres but Postgres is unavailable, it falls back to SQLite.
+- Set `AUTO_DB_FALLBACK=0` to force fail-fast instead of fallback.
+
 ### Run with PostgreSQL (recommended for staging/prod)
 
 ```bash

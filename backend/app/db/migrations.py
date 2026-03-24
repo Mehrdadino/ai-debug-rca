@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _sync_database_url(database_url: str) -> str:
@@ -21,4 +24,9 @@ def run_migrations_to_head() -> None:
     cfg = Config(str(repo_root / "alembic.ini"))
     cfg.set_main_option("script_location", str(repo_root / "alembic"))
     cfg.set_main_option("sqlalchemy.url", _sync_database_url(settings.database_url))
-    command.upgrade(cfg, "head")
+    try:
+        command.upgrade(cfg, "head")
+    except BaseException:
+        # Some Alembic failure modes can bubble up as SystemExit; log full traceback.
+        logger.exception("Failed to run database migrations to head")
+        raise

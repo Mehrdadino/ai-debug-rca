@@ -1,3 +1,5 @@
+import logging
+import traceback
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,15 +10,29 @@ from app.config import settings
 from app.db.engine import close_db, init_db
 from app.services.ingest_worker import start_ingest_worker, stop_ingest_worker
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
-    if not settings.ingest_sync:
-        start_ingest_worker()
-    yield
-    await stop_ingest_worker()
-    await close_db()
+    logger.info("lifespan startup begin")
+    try:
+        await init_db()
+        logger.info("lifespan init_db complete")
+        if not settings.ingest_sync:
+            start_ingest_worker()
+            logger.info("lifespan ingest worker started")
+        yield
+    except BaseException as exc:
+        print(f"[startup-error] {type(exc).__name__}: {exc}", flush=True)
+        traceback.print_exc()
+        logger.exception("lifespan failed")
+        raise
+    finally:
+        logger.info("lifespan shutdown begin")
+        await stop_ingest_worker()
+        await close_db()
+        logger.info("lifespan shutdown complete")
 
 
 app = FastAPI(
