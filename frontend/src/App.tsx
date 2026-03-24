@@ -48,6 +48,10 @@ type VisualNode = {
   x: number
   y: number
 }
+type GraphTooltipPos = { x: number; y: number }
+const GRAPH_TOOLTIP_WIDTH = 220
+const GRAPH_TOOLTIP_HEIGHT = 92
+const GRAPH_TOOLTIP_MAX_RADIUS = 230
 type PersistedUiState = {
   baseUrl?: string
   tab?: TabKey
@@ -271,6 +275,8 @@ function App() {
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [lastPointer, setLastPointer] = useState<{ x: number; y: number } | null>(null)
+  const [tooltipPos, setTooltipPos] = useState<GraphTooltipPos | null>(null)
+  const [tooltipStepId, setTooltipStepId] = useState('')
   const graphViewportRef = useRef<HTMLDivElement | null>(null)
   const timelineRef = useRef<HTMLOListElement | null>(null)
   const zoomRef = useRef(1)
@@ -281,6 +287,13 @@ function App() {
     startY: 0,
     startPanX: 0,
     startPanY: 0,
+  })
+  const tooltipDragRef = useRef<{ active: boolean; startX: number; startY: number; startTooltipX: number; startTooltipY: number }>({
+    active: false,
+    startX: 0,
+    startY: 0,
+    startTooltipX: 0,
+    startTooltipY: 0,
   })
 
   const [steps, setSteps] = useState<StepSummary[]>([])
@@ -339,14 +352,145 @@ function App() {
     return m
   }, [visualNodes])
   const selectedStep = useMemo(() => traceSteps.find((s) => s.step_id === selectedStepId) ?? null, [traceSteps, selectedStepId])
+  const tooltipNode = useMemo(() => visualNodeById.get(tooltipStepId) ?? null, [visualNodeById, tooltipStepId])
 
   useEffect(() => {
     if (!traceSteps.length) {
       setSelectedStepId('')
+      setTooltipPos(null)
+      setTooltipStepId('')
       return
     }
     setSelectedStepId((prev) => (prev && traceSteps.some((s) => s.step_id === prev) ? prev : traceSteps[0].step_id))
   }, [traceSteps])
+
+  function openTooltipForStep(stepId: string): void {
+    const node = visualNodeById.get(stepId)
+    if (!node) return
+    setTooltipStepId(stepId)
+    const placed = placeTooltipNearStep(stepId)
+    setTooltipPos(placed)
+  }
+
+  function clampTooltipPos(pos: GraphTooltipPos): GraphTooltipPos {
+    const viewport = graphViewportRef.current
+    if (!viewport) return pos
+    const currentZoom = zoomRef.current
+    const currentPan = panRef.current
+    const vw = Math.max(240, viewport.clientWidth)
+    const vh = Math.max(200, viewport.clientHeight)
+    const margin = 8
+    const minX = (margin - currentPan.x) / currentZoom
+    const maxX = (vw - margin - GRAPH_TOOLTIP_WIDTH * currentZoom - currentPan.x) / currentZoom
+    const minY = (margin - currentPan.y) / currentZoom
+    const maxY = (vh - margin - GRAPH_TOOLTIP_HEIGHT * currentZoom - currentPan.y) / currentZoom
+    return {
+      x: Math.min(Math.max(pos.x, minX), Math.max(minX, maxX)),
+      y: Math.min(Math.max(pos.y, minY), Math.max(minY, maxY)),
+    }
+  }
+
+  function rectsOverlap(
+    a: { x: number; y: number; w: number; h: number },
+    b: { x: number; y: number; w: number; h: number },
+  ): boolean {
+    return !(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y)
+  }
+
+  function overlapArea(
+    a: { x: number; y: number; w: number; h: number },
+    b: { x: number; y: number; w: number; h: number },
+  ): number {
+    const xOverlap = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x))
+    const yOverlap = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y))
+    return xOverlap * yOverlap
+  }
+
+  function clampTooltipToRadius(pos: GraphTooltipPos, node: VisualNode): GraphTooltipPos {
+    const nodeCx = node.x + 40
+    const nodeCy = node.y + 24
+    const tipCx = pos.x + GRAPH_TOOLTIP_WIDTH / 2
+    const tipCy = pos.y + GRAPH_TOOLTIP_HEIGHT / 2
+    const dx = tipCx - nodeCx
+    const dy = tipCy - nodeCy
+    const dist = Math.hypot(dx, dy)
+    if (dist <= GRAPH_TOOLTIP_MAX_RADIUS || dist === 0) return pos
+    const scale = GRAPH_TOOLTIP_MAX_RADIUS / dist
+    return {
+      x: nodeCx + dx * scale - GRAPH_TOOLTIP_WIDTH / 2,
+      y: nodeCy + dy * scale - GRAPH_TOOLTIP_HEIGHT / 2,
+    }
+  }
+
+  function enforceNoOwnStepOverlap(pos: GraphTooltipPos, node: VisualNode): GraphTooltipPos {
+    const tip = { x: pos.x, y: pos.y, w: GRAPH_TOOLTIP_WIDTH, h: GRAPH_TOOLTIP_HEIGHT }
+    const own = { x: node.x, y: node.y, w: 80, h: 48 }
+    if (!rectsOverlap(tip, own)) return pos
+
+    const candidates: GraphTooltipPos[] = [
+      { x: node.x + 94, y: node.y - 8 },
+      { x: node.x - GRAPH_TOOLTIP_WIDTH - 14, y: node.y - 8 },
+      { x: node.x - (GRAPH_TOOLTIP_WIDTH - 80) / 2, y: node.y - GRAPH_TOOLTIP_HEIGHT - 14 },
+      { x: node.x - (GRAPH_TOOLTIP_WIDTH - 80) / 2, y: node.y + 48 + 14 },
+    ]
+    for (const c of candidates) {
+      const v = clampTooltipPos(clampTooltipToRadius(c, node))
+      const t = { x: v.x, y: v.y, w: GRAPH_TOOLTIP_WIDTH, h: GRAPH_TOOLTIP_HEIGHT }
+      if (!rectsOverlap(t, own)) return v
+    }
+    return pos
+  }
+
+  function scoreTooltipPos(pos: GraphTooltipPos, node: VisualNode): number {
+    const tip = { x: pos.x, y: pos.y, w: GRAPH_TOOLTIP_WIDTH, h: GRAPH_TOOLTIP_HEIGHT }
+    const own = { x: node.x, y: node.y, w: 80, h: 48 }
+    let score = 0
+    if (rectsOverlap(tip, own)) score += 1_000_000
+
+    for (const n of visualNodes) {
+      if (n.id === node.id) continue
+      const r = { x: n.x, y: n.y, w: 80, h: 48 }
+      score += overlapArea(tip, r) * 3
+    }
+
+    const nodeCx = node.x + 40
+    const nodeCy = node.y + 24
+    const tipCx = pos.x + GRAPH_TOOLTIP_WIDTH / 2
+    const tipCy = pos.y + GRAPH_TOOLTIP_HEIGHT / 2
+    const dist = Math.hypot(tipCx - nodeCx, tipCy - nodeCy)
+    score += dist
+    if (dist > GRAPH_TOOLTIP_MAX_RADIUS) score += (dist - GRAPH_TOOLTIP_MAX_RADIUS) * 200
+    return score
+  }
+
+  function placeTooltipNearStep(stepId: string): GraphTooltipPos {
+    const node = visualNodeById.get(stepId)
+    if (!node) return { x: 0, y: 0 }
+    const candidates: GraphTooltipPos[] = [
+      { x: node.x + 94, y: node.y - 8 },
+      { x: node.x - GRAPH_TOOLTIP_WIDTH - 14, y: node.y - 8 },
+      { x: node.x - (GRAPH_TOOLTIP_WIDTH - 80) / 2, y: node.y - GRAPH_TOOLTIP_HEIGHT - 14 },
+      { x: node.x - (GRAPH_TOOLTIP_WIDTH - 80) / 2, y: node.y + 48 + 14 },
+      { x: node.x + 94, y: node.y - GRAPH_TOOLTIP_HEIGHT + 24 },
+      { x: node.x - GRAPH_TOOLTIP_WIDTH - 14, y: node.y - GRAPH_TOOLTIP_HEIGHT + 24 },
+      { x: node.x + 54, y: node.y + 58 },
+      { x: node.x - GRAPH_TOOLTIP_WIDTH + 26, y: node.y + 58 },
+    ]
+    let best = clampTooltipPos(clampTooltipToRadius(candidates[0], node))
+    best = enforceNoOwnStepOverlap(best, node)
+    let bestScore = scoreTooltipPos(best, node)
+
+    for (const c of candidates.slice(1)) {
+      let p = clampTooltipPos(clampTooltipToRadius(c, node))
+      p = enforceNoOwnStepOverlap(p, node)
+      const s = scoreTooltipPos(p, node)
+      if (s < bestScore) {
+        best = p
+        bestScore = s
+      }
+    }
+    return best
+  }
 
   function centerGraphToFit(): void {
     const viewport = graphViewportRef.current
@@ -447,6 +591,22 @@ function App() {
   function onGraphMouseMove(e: MouseEvent<HTMLDivElement>): void {
     const rect = e.currentTarget.getBoundingClientRect()
     setLastPointer({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+    if (tooltipDragRef.current.active) {
+      const dx = (e.clientX - tooltipDragRef.current.startX) / zoomRef.current
+      const dy = (e.clientY - tooltipDragRef.current.startY) / zoomRef.current
+      const node = visualNodeById.get(tooltipStepId)
+      let nextPos = clampTooltipPos({
+        x: tooltipDragRef.current.startTooltipX + dx,
+        y: tooltipDragRef.current.startTooltipY + dy,
+      })
+      if (node) {
+        nextPos = clampTooltipToRadius(nextPos, node)
+        nextPos = clampTooltipPos(nextPos)
+        nextPos = enforceNoOwnStepOverlap(nextPos, node)
+      }
+      setTooltipPos(nextPos)
+      return
+    }
     if (!panDragRef.current.active) return
     const dx = e.clientX - panDragRef.current.startX
     const dy = e.clientY - panDragRef.current.startY
@@ -458,6 +618,19 @@ function App() {
 
   function onGraphMouseUp(): void {
     panDragRef.current.active = false
+    tooltipDragRef.current.active = false
+  }
+
+  function onTooltipMouseDown(e: MouseEvent<SVGGElement>): void {
+    if (!tooltipPos) return
+    e.stopPropagation()
+    tooltipDragRef.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startTooltipX: tooltipPos.x,
+      startTooltipY: tooltipPos.y,
+    }
   }
 
   useEffect(() => {
@@ -900,7 +1073,16 @@ function App() {
                         return (
                           <g
                             key={n.id}
-                            onClick={() => setSelectedStepId(n.id)}
+                            onClick={() => {
+                              setSelectedStepId(n.id)
+                              const isSame = tooltipPos !== null && tooltipStepId === n.id
+                              if (isSame) {
+                                setTooltipPos(null)
+                                setTooltipStepId('')
+                              } else {
+                                openTooltipForStep(n.id)
+                              }
+                            }}
                             className={isActive ? 'graph-node active' : 'graph-node'}
                           >
                             <rect
@@ -916,6 +1098,25 @@ function App() {
                           </g>
                         )
                       })}
+                      {selectedStep && tooltipPos && tooltipNode && tooltipStepId === selectedStep.step_id && (
+                        <g className="graph-tooltip" onMouseDown={onTooltipMouseDown}>
+                          <line
+                            x1={tooltipNode.x + 40}
+                            y1={tooltipNode.y + 24}
+                            x2={tooltipPos.x}
+                            y2={tooltipPos.y + 24}
+                            className="graph-tooltip-link"
+                          />
+                          <rect x={tooltipPos.x} y={tooltipPos.y} width={GRAPH_TOOLTIP_WIDTH} height={GRAPH_TOOLTIP_HEIGHT} rx={10} className="graph-tooltip-box" />
+                          <text x={tooltipPos.x + 10} y={tooltipPos.y + 18} className="graph-tooltip-title">{selectedStep.step_id}</text>
+                          <text x={tooltipPos.x + 10} y={tooltipPos.y + 36} className="graph-tooltip-line">type: {selectedStep.type}</text>
+                          <text x={tooltipPos.x + 10} y={tooltipPos.y + 52} className="graph-tooltip-line">latency: {formatLatencyMs(selectedStep.metadata)}</text>
+                          <text x={tooltipPos.x + 10} y={tooltipPos.y + 68} className="graph-tooltip-line">
+                            {selectedStep.error ? `error: ${selectedStep.error}` : 'status: ok'}
+                          </text>
+                          <text x={tooltipPos.x + 10} y={tooltipPos.y + 84} className="graph-tooltip-hint">drag to move</text>
+                        </g>
+                      )}
                       </g>
                     </svg>
                   </div>
@@ -939,6 +1140,7 @@ function App() {
                           onClick={() => {
                             setSelectedStepId(step.step_id)
                             centerGraphOnStep(step.step_id)
+                            openTooltipForStep(step.step_id)
                           }}
                         >
                           <div className="timeline-index">{idx + 1}</div>
