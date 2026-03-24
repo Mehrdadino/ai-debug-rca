@@ -134,6 +134,10 @@
   grid-template-columns: minmax(260px, 0.75fr) minmax(0, 1.9fr);
 }
 
+.traces-layout.focus-graph {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .card {
   padding: 16px;
   min-width: 0;
@@ -297,12 +301,28 @@ pre {
   gap: 12px;
 }
 
+.traces-layout.focus-graph .viz-grid {
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.65fr);
+}
+
+.traces-layout.focus-graph .viz-grid:has(.timeline-panel) {
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.65fr);
+}
+
+.traces-layout.focus-graph .viz-grid:not(:has(.timeline-panel)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .viz-panel {
   background: rgba(10, 14, 25, 0.62);
   border: 1px solid rgba(124, 147, 255, 0.22);
   border-radius: 12px;
   padding: 12px;
   min-width: 0;
+}
+
+.timeline-panel.collapsed {
+  padding: 8px;
 }
 
 .graph-wrap {

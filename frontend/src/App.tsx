@@ -265,6 +265,8 @@ function App() {
   const [traceEnvironment, setTraceEnvironment] = useState<TraceEnvironment>('prod')
   const [traceDetail, setTraceDetail] = useState<Record<string, unknown> | null>(null)
   const [diagnosis, setDiagnosis] = useState<Record<string, unknown> | null>(null)
+  const [graphFocusMode, setGraphFocusMode] = useState(false)
+  const [showTimelineRail, setShowTimelineRail] = useState(true)
   const [selectedStepId, setSelectedStepId] = useState('')
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -460,9 +462,10 @@ function App() {
 
   useEffect(() => {
     if (!selectedStepId || !timelineRef.current) return
+    if (graphFocusMode && !showTimelineRail) return
     const el = timelineRef.current.querySelector<HTMLElement>(`[data-step-id="${selectedStepId}"]`)
     if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }, [selectedStepId])
+  }, [selectedStepId, graphFocusMode, showTimelineRail])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -771,8 +774,9 @@ function App() {
       )}
 
       {tab === 'traces' && (
-        <section className="panel grid-two traces-layout">
-          <article className="glass card">
+        <section className={`panel grid-two traces-layout ${graphFocusMode ? 'focus-graph' : ''}`}>
+          {!graphFocusMode && (
+          <article className="glass card trace-list-card">
             <h3>Trace List</h3>
             <p className="muted">Recent traces loaded: {traceList.length} · API base: {baseUrl}</p>
             <div className="grid">
@@ -806,6 +810,7 @@ function App() {
               ))}
             </ul>
           </article>
+          )}
           <article className="glass card">
             <h3>Trace Detail Query</h3>
             <div className="grid">
@@ -834,9 +839,17 @@ function App() {
                   <div>
                     <div className="graph-toolbar">
                       <div className="actions">
+                        <button className="secondary" onClick={() => setGraphFocusMode((v) => !v)}>
+                          {graphFocusMode ? 'Exit Focus Graph' : 'Focus Graph'}
+                        </button>
                         <button className="secondary" onClick={() => zoomTo(zoom / 1.12, lastPointer ?? undefined)}>Zoom Out</button>
                         <button className="secondary" onClick={resetViewport}>Reset View</button>
                         <button className="secondary" onClick={() => zoomTo(zoom * 1.12, lastPointer ?? undefined)}>Zoom In</button>
+                        {graphFocusMode && (
+                          <button className="secondary" onClick={() => setShowTimelineRail((v) => !v)}>
+                            {showTimelineRail ? 'Hide Timeline' : 'Show Timeline'}
+                          </button>
+                        )}
                         <span className="muted">Zoom {Math.round(zoom * 100)}%</span>
                       </div>
                     </div>
@@ -909,7 +922,8 @@ function App() {
                   </div>
                 )}
               </div>
-              <div className="viz-panel">
+              {(!graphFocusMode || showTimelineRail) && (
+              <div className="viz-panel timeline-panel">
                 <h3>Step Timeline</h3>
                 {!traceSteps.length ? (
                   <p className="muted">No steps yet.</p>
@@ -948,6 +962,7 @@ function App() {
                   </div>
                 )}
               </div>
+              )}
             </div>
             <h3>Trace JSON</h3>
             <pre>{traceDetail ? JSON.stringify(traceDetail, null, 2) : 'No trace loaded yet.'}</pre>
