@@ -42,7 +42,7 @@ class IngestQueueFullError(Exception):
 
 
 class IngestTraceConflictError(Exception):
-    """(tenant_id, environment, trace_id) already present in backlog."""
+    """(tenant_id, trace_id) already present in backlog."""
 
 
 async def _worker_loop() -> None:
@@ -65,9 +65,8 @@ async def _worker_loop() -> None:
                 await ack_ingest_job(session, job.id)
         except TraceConflictError:
             logger.warning(
-                "ingest worker: duplicate (tenant_id, environment, trace_id) (race), skipping: tenant=%s env=%s trace_id=%s",
+                "ingest worker: duplicate (tenant_id, trace_id) (race), skipping: tenant=%s trace_id=%s",
                 trace.tenant_id,
-                trace.environment.value,
                 trace.trace_id,
             )
             async with get_session() as session:

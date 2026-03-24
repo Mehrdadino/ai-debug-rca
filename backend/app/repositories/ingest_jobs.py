@@ -12,7 +12,7 @@ from app.models.trace import Trace
 
 
 class IngestJobConflictError(Exception):
-    """(tenant_id, environment, trace_id) already exists in ingest backlog."""
+    """(tenant_id, trace_id) already exists in ingest backlog."""
 
 
 async def queued_jobs_count(session: AsyncSession) -> int:

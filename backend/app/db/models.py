@@ -16,7 +16,7 @@ class TraceRecord(Base):
 
     __tablename__ = "traces"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "environment", "trace_id", name="uq_traces_tenant_env_trace"),
+        UniqueConstraint("tenant_id", "trace_id", name="uq_traces_tenant_trace"),
         Index("ix_traces_tenant_env_started_at", "tenant_id", "environment", "started_at"),
     )
 
@@ -41,9 +41,8 @@ class DiagnosisRecord(Base):
     __table_args__ = (
         UniqueConstraint(
             "tenant_id",
-            "environment",
             "trace_id",
-            name="uq_diagnoses_tenant_env_trace",
+            name="uq_diagnoses_tenant_trace",
         ),
     )
 
@@ -65,10 +64,9 @@ class TraceStepRecord(Base):
     __table_args__ = (
         UniqueConstraint(
             "tenant_id",
-            "environment",
             "trace_id",
             "step_id",
-            name="uq_trace_steps_tenant_env_trace_step",
+            name="uq_trace_steps_tenant_trace_step",
         ),
         Index("ix_trace_steps_tenant_env_trace", "tenant_id", "environment", "trace_id"),
         Index(
@@ -109,9 +107,8 @@ class IngestJobRecord(Base):
     __table_args__ = (
         UniqueConstraint(
             "tenant_id",
-            "environment",
             "trace_id",
-            name="uq_ingest_jobs_tenant_env_trace",
+            name="uq_ingest_jobs_tenant_trace",
         ),
     )
 

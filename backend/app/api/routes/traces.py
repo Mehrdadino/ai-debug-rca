@@ -181,13 +181,10 @@ async def _ingest_one_trace(
             detail="body.tenant_id must match authenticated tenant",
         )
     normalized = normalize_trace(trace)
-    if await trace_exists(session, tenant_id, trace.trace_id, trace.environment.value):
+    if await trace_exists(session, tenant_id, trace.trace_id):
         raise HTTPException(
             status_code=409,
-            detail=(
-                f"trace_id {trace.trace_id} already exists for this tenant and environment "
-                f"({trace.environment.value})"
-            ),
+            detail=(f"trace_id {trace.trace_id} already exists for this tenant"),
         )
 
     if settings.ingest_sync:
@@ -197,8 +194,7 @@ async def _ingest_one_trace(
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"trace_id {trace.trace_id} already exists for this tenant and environment "
-                    f"({trace.environment.value})"
+                    f"trace_id {trace.trace_id} already exists for this tenant"
                 ),
             ) from None
         return IngestTraceResponse(trace_id=trace.trace_id, status="accepted")
@@ -209,8 +205,7 @@ async def _ingest_one_trace(
         raise HTTPException(
             status_code=409,
             detail=(
-                f"trace_id {trace.trace_id} already exists for this tenant and environment "
-                f"({trace.environment.value})"
+                f"trace_id {trace.trace_id} already exists for this tenant"
             ),
         ) from None
     except IngestQueueFullError:
@@ -269,16 +264,21 @@ async def get_trace_diagnosis(
     trace_id: UUID,
     environment: TraceEnvironment = Query(
         TraceEnvironment.PROD,
-        description="Trace environment for this trace_id lookup. Defaults to prod.",
+        description="Must match the stored trace environment for this trace_id.",
     ),
     tenant_id: str = Depends(get_tenant_id),
     session: AsyncSession = Depends(db_session),
 ) -> Diagnosis:
-    row = await get_diagnosis_for_trace(session, tenant_id, trace_id, environment.value)
+    row = await get_diagnosis_for_trace(session, tenant_id, trace_id)
     if row is None:
         raise HTTPException(
             status_code=404,
             detail="diagnosis not found for this trace",
+        )
+    if row.environment != environment.value:
+        raise HTTPException(
+            status_code=404,
+            detail="diagnosis not found for this trace and environment",
         )
     return Diagnosis.model_validate(row.payload)
 
@@ -481,12 +481,14 @@ async def get_trace(
     trace_id: UUID,
     environment: TraceEnvironment = Query(
         TraceEnvironment.PROD,
-        description="Trace environment for this trace_id lookup. Defaults to prod.",
+        description="Must match the stored trace environment for this trace_id.",
     ),
     tenant_id: str = Depends(get_tenant_id),
     session: AsyncSession = Depends(db_session),
 ) -> Trace:
-    row = await get_trace_by_id(session, tenant_id, trace_id, environment.value)
+    row = await get_trace_by_id(session, tenant_id, trace_id)
     if row is None:
         raise HTTPException(status_code=404, detail="trace not found")
+    if row.environment != environment.value:
+        raise HTTPException(status_code=404, detail="trace not found for this environment")
     return Trace.model_validate(row.payload)

@@ -121,8 +121,8 @@ def test_same_trace_id_allowed_across_tenants(client: TestClient) -> None:
     assert gb.json()["tenant_id"] == "org_b"
 
 
-def test_same_trace_id_allowed_across_environments(client: TestClient) -> None:
-    """Uniqueness includes environment: same trace_id can exist in prod/staging."""
+def test_same_trace_id_conflict_across_environments(client: TestClient) -> None:
+    """Uniqueness is per tenant+trace_id: second ingest with same id conflicts even if env differs."""
     tid = uuid.uuid4()
     base = {
         "schema_version": "1.0",
@@ -137,14 +137,13 @@ def test_same_trace_id_allowed_across_environments(client: TestClient) -> None:
     r_prod = client.post("/v1/traces", json={**base, "environment": "prod"}, headers=h)
     r_stg = client.post("/v1/traces", json={**base, "environment": "staging"}, headers=h)
     assert r_prod.status_code == 201
-    assert r_stg.status_code == 201
+    assert r_stg.status_code == 409
 
     g_default = client.get(f"/v1/traces/{tid}", headers=h)
-    g_stg = client.get(f"/v1/traces/{tid}", headers=h, params={"environment": "staging"})
     assert g_default.status_code == 200
     assert g_default.json()["environment"] == "prod"
-    assert g_stg.status_code == 200
-    assert g_stg.json()["environment"] == "staging"
+    g_stg = client.get(f"/v1/traces/{tid}", headers=h, params={"environment": "staging"})
+    assert g_stg.status_code == 404
 
 
 def test_validation_duplicate_step_ids(client: TestClient) -> None:

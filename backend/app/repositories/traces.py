@@ -14,7 +14,7 @@ from app.services.rules_engine import evaluate_trace
 
 
 class TraceConflictError(Exception):
-    """(tenant_id, environment, trace_id) already exists."""
+    """(tenant_id, trace_id) already exists for this tenant."""
 
 
 async def insert_trace(session: AsyncSession, trace: Trace) -> TraceRecord:
@@ -70,12 +70,10 @@ async def get_trace_by_id(
     session: AsyncSession,
     tenant_id: str,
     trace_id: UUID,
-    environment: str = "prod",
 ) -> Optional[TraceRecord]:
     q = select(TraceRecord).where(
         TraceRecord.trace_id == str(trace_id),
         TraceRecord.tenant_id == tenant_id,
-        TraceRecord.environment == environment,
     )
     result = await session.execute(q)
     return result.scalar_one_or_none()
@@ -85,7 +83,6 @@ async def trace_exists(
     session: AsyncSession,
     tenant_id: str,
     trace_id: UUID,
-    environment: str = "prod",
 ) -> bool:
     q = (
         select(func.count())
@@ -93,7 +90,6 @@ async def trace_exists(
         .where(
             TraceRecord.trace_id == str(trace_id),
             TraceRecord.tenant_id == tenant_id,
-            TraceRecord.environment == environment,
         )
     )
     result = await session.execute(q)

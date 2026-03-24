@@ -126,8 +126,8 @@ python3 -m alembic upgrade head
 
 ## Data model notes
 
-- `**UNIQUE (tenant_id, environment, trace_id)**` on `traces`, `diagnoses`, and `ingest_jobs` — same UUID may exist under different tenants or environments; **409** if the triple collides for the authenticated tenant.
-- Environment is a first-class dimension: `prod|staging|dev|critical` (default `prod`).
+- **`UNIQUE (tenant_id, trace_id)`** on `traces`, `diagnoses`, and `ingest_jobs` (and **`UNIQUE (tenant_id, trace_id, step_id)`** on `trace_steps`). The same `trace_id` may exist under **different** tenants; **409** if that pair already exists for the authenticated tenant.
+- **`environment`** (`prod|staging|dev|critical`, default `prod`) is **metadata** for filtering and display (e.g. list queries and optional match on `GET` detail/diagnosis). It is **not** a second namespace for identity: traces are **issued by this system** with one logical id per tenant; clients mainly **log** that id. Re-posting the same `trace_id` with different `environment` or payload is treated as a duplicate, not a second trace—**updates** to an existing trace will be a separate API path when added.
 - Current rate limiter is **in-process** (per API process). For multi-instance deployments, move rate/quota state to shared storage (e.g. Redis/Postgres).
 - Per-tenant policy overrides are persisted in `tenant_limits` and applied before global defaults.
 - Background ingest uses claim/ack/release semantics (Postgres uses `FOR UPDATE SKIP LOCKED`) for safe multi-worker processing.

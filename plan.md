@@ -156,6 +156,7 @@ Everything else supports or monetizes these three.
 | **Optional partial traces** | Streaming / failures mid-run still yield value if schema allows incomplete steps |
 | **Stable identifiers** | `trace_id`, `step_id`, optional `span_id` / `traceparent` for OTel alignment later |
 | **External correlation** | Optional `correlation_id`, `session_id`, upstream `provider_trace_id` for linking to other systems |
+| **Ingest owner / caller type** | Persist **whether the trace was produced in a human-driven context vs an automated service context** (see **§7.7**). Distinct from **this product’s** future user accounts and RBAC (§12)—this is **metadata about the client’s call path** at ingest time. |
 
 ### 7.4 Example shape (illustrative—not final JSON Schema)
 
@@ -164,6 +165,8 @@ Everything else supports or monetizes these three.
   "schema_version": "1.0",
   "trace_id": "uuid",
   "tenant_id": "org_...",
+  "ingest_owner_type": "user | service",
+  "ingest_owner_ref": "string | null",
   "started_at": "ISO-8601",
   "ended_at": "ISO-8601",
   "status": "success | error | partial",
@@ -190,7 +193,7 @@ Everything else supports or monetizes these three.
 }
 ```
 
-**Implementation note**: Define **JSON Schema** (or Protobuf) + validation in ingestion; document **required vs optional** per step type.
+**Implementation note**: Define **JSON Schema** (or Protobuf) + validation in ingestion; document **required vs optional** per step type. **`ingest_owner_*`** fields are part of the trace document once added to schema v1 (see **§7.7**).
 
 ### 7.5 “Universal” vs MVP instrumentation
 
@@ -216,6 +219,23 @@ Adapters are a **product surface**: each adapter is a milestone, not a vague pro
 - In **MVP/dev**, `X-Tenant-ID` may be a plain string for speed.
 - In **production**, treat tenant as **server-issued**: map **API keys**, **JWT**, or **mTLS** to a tenant record customers cannot spoof. Clients should not pick arbitrary tenant names for real data.
 
+### 7.7 Ingest owner type (human vs service caller)
+
+Traces can be emitted when **an end user** drives a run (e.g. chat UI, support console) or when **automation** drives it (batch job, worker, cron, backend-to-backend pipeline). Both are valid; they answer different questions in the UI and in analytics (“sessions humans saw” vs “overnight reprocessing”). **Store this distinction on the trace** so we do not infer it from heuristics alone.
+
+| Field | Purpose |
+|-------|---------|
+| **`ingest_owner_type`** (enum) | **`user`** — run is tied to a **human-driven** client flow (interactive product surface). **`service`** — run is produced by **non-interactive automation** (scheduled job, internal worker, API integration without a human in the loop for that execution). |
+| **`ingest_owner_ref`** (optional string) | Opaque identifier from the **customer’s** systems: e.g. their user id, service account id, or job id. **Not** a substitute for `trace_id`; used for display, correlation, and future RBAC joins when the customer maps identities. **Never required** for correctness of storage. |
+
+**Semantics**
+
+- This is **caller classification at the tenant’s edge**, not **our product’s** logged-in investigator (that remains **§12 RBAC**). A **`service`**-owned trace may still be viewed by a human analyst in our UI later.
+- **SDK / API contract**: default may be **`service`** if unspecified (safe for headless integrations); interactive SDK paths should set **`user`** when the run corresponds to an end-user request.
+- **Storage**: persist at **trace** row level first; propagate to steps only if a future rule needs it (unlikely for v1).
+
+**Why not overload `tenant_id` or API keys?** API keys often identify **automation** only; JWTs may identify **either** a human or a workload. Explicit **`ingest_owner_type`** avoids ambiguity and keeps analytics honest.
+
 ---
 
 ## 8. Reference architecture (logical)
@@ -226,7 +246,7 @@ This section is the **directionally correct** system shape for success: **clear 
 
 | Context | Responsibility |
 |---------|------------------|
-| **Ingest API** | Authenticate tenant; accept batches; validate; enqueue; **return quickly** (202 + idempotency key). |
+| **Ingest API** | Authenticate tenant; accept batches; validate; persist **`ingest_owner_type`** (and optional **`ingest_owner_ref`**) per **§7.7**; enqueue; **return quickly** (202 + idempotency key). |
 | **Normalization worker** | Schema version handling; fill defaults; DAG linking; write to stores; emit “trace ready” events. |
 | **Query API** | List/filter traces; trace detail; support UI and automation. |
 | **Diagnosis engine** | Rules + scoring → **primary hypothesis** + evidence; optional LLM **explanation** from structured bundle only. |
@@ -356,7 +376,7 @@ As in §8.3; implement **blob + index** before fancy query features.
 
 ### 10.1 MVP includes
 
-1. **Canonical schema v1** + validation.
+1. **Canonical schema v1** + validation, including **`ingest_owner_type`** / optional **`ingest_owner_ref`** per **§7.7**.
 2. **Ingestion**: HTTP API + minimal SDK (language TBD in implementation phase); **queue-backed** processing with **single + batch ingest** support.
 3. **Normalization pipeline** + **dual storage** (operational DB + object store for blobs).
 4. **Query APIs** + **UI**: graph + timeline, failure filters.
@@ -563,7 +583,7 @@ The product’s **core diagnosis** is **deterministic**: rules over the **normal
 
 ## 18. Summary checklist (what “good” looks like)
 
-- [ ] Schema v1 documented and versioned; strict step types; **correlation** fields for coexistence.
+- [ ] Schema v1 documented and versioned; strict step types; **correlation** fields for coexistence; **ingest owner type** (user vs service) + optional **owner ref** per **§7.7**.
 - [ ] One ICP; **failure scenarios** and **design partners** documented.
 - [ ] **TTPC** defined and measured; **90-day proof** and **kill gates** understood by the team.
 - [ ] Reference architecture: **write vs read path**, **diagnosis boundary**, **dual storage**.
@@ -586,7 +606,7 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 
 - Python FastAPI backend: `POST /v1/traces`, `POST /v1/traces/batch`, `GET` list (optional **`environment`** + **`started_at_from` / `started_at_to`** on run time) / detail / diagnosis, SQLite + `ingest_jobs` durable backlog, rule-based `DiagnosisRecord`, example `scripts/`.
 - **Tenant auth (production path):** optional **`RCA_API_KEYS`** JSON map → `tenant_id`, plus **JWT bearer auth** (`RCA_JWT_*`: secret, algorithm, tenant claim, optional issuer/audience); clients use **`Authorization: Bearer`** or **`X-API-Key`**; with keys/JWT unset, dev uses **`X-Tenant-ID`** only.
-- **Composite uniqueness:** **`UNIQUE (tenant_id, environment, trace_id)`** on **`traces`**, **`diagnoses`**, **`ingest_jobs`** (named constraints `uq_traces_tenant_env_trace`, `uq_diagnoses_tenant_env_trace`, `uq_ingest_jobs_tenant_env_trace`). The same `trace_id` UUID may exist for **different** tenants or environments; duplicates **within** the same tenant+environment return **409**.
+- **Composite uniqueness:** **`UNIQUE (tenant_id, trace_id)`** on **`traces`**, **`diagnoses`**, **`ingest_jobs`** (and **`UNIQUE (tenant_id, trace_id, step_id)`** on **`trace_steps`**). The same `trace_id` UUID may exist for **different** tenants; duplicates **within** the same tenant (regardless of `environment` field) return **409**. `environment` remains a column for filtering and display.
 - **Rate limits & quotas (initial):** per-tenant ingest request-rate and daily trace quota with **429 + Retry-After** on `POST /v1/traces` and `/v1/traces/batch` (current implementation is in-process; distributed limiter backend remains a scale task).
 - **Tenant limit management (initial):** admin-only APIs (`/v1/admin/tenants/{tenant_id}/limits`) persist per-tenant policies in `tenant_limits`; ingest enforcement resolves tenant override first, then global defaults.
 - **Migrations (initial):** Alembic is wired with a baseline revision; startup runs `upgrade head` instead of relying only on `create_all`.
@@ -607,17 +627,18 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 
 6. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
 7. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
+8. **Ingest owner metadata** — add **`ingest_owner_type`** (`user` \| `service`) and optional **`ingest_owner_ref`** to the HTTP + stored trace model per **§7.7** (DB columns + list/filter in UI when ready).
 
 ### Ops & enterprise
 
-8. **Observability** — OpenTelemetry on our own API/workers.
-9. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
-10. **Webhooks / export** — after hypothesis quality is credible.
+9. **Observability** — OpenTelemetry on our own API/workers.
+10. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
+11. **Webhooks / export** — after hypothesis quality is credible.
 
 ### GTM
 
-11. **Design partner brief** + **90-day TTPC** measurement loop.
-12. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
+12. **Design partner brief** + **90-day TTPC** measurement loop.
+13. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
 
 ---
 
