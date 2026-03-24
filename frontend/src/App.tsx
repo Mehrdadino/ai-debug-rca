@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
-type TabKey = 'dashboard' | 'ingest' | 'traces' | 'steps' | 'admin' | 'testing'
+type TabKey = 'settings' | 'ingest' | 'traces' | 'steps' | 'admin' | 'testing'
 type TraceStatus = 'success' | 'error' | 'partial'
 type TraceEnvironment = 'prod' | 'staging' | 'dev' | 'critical'
 
@@ -32,6 +32,13 @@ type TenantLimits = {
 }
 
 type ApiError = { status: number; detail: string }
+type ConnectionState = 'unknown' | 'connected' | 'disconnected'
+type PersistedUiState = {
+  baseUrl?: string
+  tab?: TabKey
+  traceLimit?: number
+}
+const UI_STATE_KEY = 'rca_ui_state_v1'
 
 function formatRequestError(e: unknown): string {
   if (e && typeof e === 'object' && 'detail' in e && typeof (e as ApiError).detail === 'string') {
@@ -91,8 +98,28 @@ async function parseResponse<T>(res: Response): Promise<T> {
 }
 
 function App() {
-  const [tab, setTab] = useState<TabKey>('dashboard')
-  const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:8000')
+  const [tab, setTab] = useState<TabKey>(() => {
+    if (typeof window === 'undefined') return 'traces'
+    try {
+      const raw = window.localStorage.getItem(UI_STATE_KEY)
+      if (!raw) return 'traces'
+      const parsed = JSON.parse(raw) as PersistedUiState
+      return parsed.tab ?? 'traces'
+    } catch {
+      return 'traces'
+    }
+  })
+  const [baseUrl, setBaseUrl] = useState(() => {
+    if (typeof window === 'undefined') return 'http://127.0.0.1:8000'
+    try {
+      const raw = window.localStorage.getItem(UI_STATE_KEY)
+      if (!raw) return 'http://127.0.0.1:8000'
+      const parsed = JSON.parse(raw) as PersistedUiState
+      return parsed.baseUrl ?? 'http://127.0.0.1:8000'
+    } catch {
+      return 'http://127.0.0.1:8000'
+    }
+  })
   const [tenantId, setTenantId] = useState('org_demo')
   const [apiKey, setApiKey] = useState('')
   const [jwtToken, setJwtToken] = useState('')
@@ -101,9 +128,24 @@ function App() {
   const [toast, setToast] = useState('')
   const [error, setError] = useState('')
   const [health, setHealth] = useState('unknown')
+  const [busyAction, setBusyAction] = useState<string | null>(null)
+  const [connectionState, setConnectionState] = useState<ConnectionState>('unknown')
+  const [lastConnectedAt, setLastConnectedAt] = useState<string>('')
+  const toastTimerRef = useRef<number | null>(null)
 
   const [traceList, setTraceList] = useState<TraceSummary[]>([])
-  const [traceLimit, setTraceLimit] = useState(25)
+  const [traceLimit, setTraceLimit] = useState(() => {
+    if (typeof window === 'undefined') return 25
+    try {
+      const raw = window.localStorage.getItem(UI_STATE_KEY)
+      if (!raw) return 25
+      const parsed = JSON.parse(raw) as PersistedUiState
+      const val = Number(parsed.traceLimit ?? 25)
+      return Number.isFinite(val) && val > 0 ? val : 25
+    } catch {
+      return 25
+    }
+  })
   const [traceIdLookup, setTraceIdLookup] = useState('')
   const [traceEnvironment, setTraceEnvironment] = useState<TraceEnvironment>('prod')
   const [traceDetail, setTraceDetail] = useState<Record<string, unknown> | null>(null)
@@ -143,6 +185,22 @@ function App() {
     return 'X-Tenant-ID dev auth'
   }, [apiKey, jwtToken])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const data: PersistedUiState = {
+      baseUrl,
+      tab,
+      traceLimit,
+    }
+    window.localStorage.setItem(UI_STATE_KEY, JSON.stringify(data))
+  }, [baseUrl, tab, traceLimit])
+
+  useEffect(() => {
+    void checkHealth(false)
+    // Run once on initial app load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function apiFetch<T>(path: string, init?: RequestInit, includeAdminToken = false): Promise<T> {
     setError('')
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -155,20 +213,46 @@ function App() {
   }
 
   function notify(message: string): void {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current)
+    }
     setToast(message)
-    window.setTimeout(() => setToast(''), 2200)
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast('')
+      toastTimerRef.current = null
+    }, 3200)
   }
 
-  async function checkHealth(): Promise<void> {
+  async function runBusy(action: string, fn: () => Promise<void>): Promise<void> {
+    if (busyAction !== null) return
+    setBusyAction(action)
+    try {
+      await fn()
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function checkHealth(notifyOnSuccess = true): Promise<void> {
     try {
       const res = await fetch(`${baseUrl}/health`)
       const payload = await parseResponse<{ status: string }>(res)
       setHealth(payload.status)
-      notify('Health check successful')
+      setConnectionState('connected')
+      if (notifyOnSuccess) {
+        notify('Health check successful')
+      }
     } catch (e) {
       setHealth('down')
+      setConnectionState('disconnected')
       setError(formatRequestError(e))
     }
+  }
+
+  async function connectBackend(): Promise<void> {
+    await checkHealth(false)
+    setLastConnectedAt(new Date().toLocaleString())
+    notify('Connected')
   }
 
   async function refreshTraces(): Promise<void> {
@@ -205,19 +289,29 @@ function App() {
     }
   }
 
-  async function fetchTraceDetail(): Promise<void> {
-    if (!traceIdLookup.trim()) return setError('Trace ID is required')
+  async function fetchTraceDetailFor(
+    traceId: string,
+    env: TraceEnvironment,
+    opts?: { notifyOnSuccess?: boolean },
+  ): Promise<void> {
     try {
-      const t = await apiFetch<Record<string, unknown>>(`/v1/traces/${traceIdLookup.trim()}?environment=${traceEnvironment}`)
-      const d = await apiFetch<Record<string, unknown>>(`/v1/traces/${traceIdLookup.trim()}/diagnosis?environment=${traceEnvironment}`)
+      const t = await apiFetch<Record<string, unknown>>(`/v1/traces/${traceId}?environment=${env}`)
+      const d = await apiFetch<Record<string, unknown>>(`/v1/traces/${traceId}/diagnosis?environment=${env}`)
       setTraceDetail(t)
       setDiagnosis(d)
-      notify('Trace and diagnosis loaded')
+      if (opts?.notifyOnSuccess) {
+        notify('Trace and diagnosis loaded')
+      }
     } catch (e) {
       setError(formatRequestError(e))
       setTraceDetail(null)
       setDiagnosis(null)
     }
+  }
+
+  async function fetchTraceDetail(): Promise<void> {
+    if (!traceIdLookup.trim()) return setError('Trace ID is required')
+    await fetchTraceDetailFor(traceIdLookup.trim(), traceEnvironment, { notifyOnSuccess: true })
   }
 
   async function refreshSteps(): Promise<void> {
@@ -302,71 +396,65 @@ function App() {
   return (
     <div className="app-shell">
       <header className="topbar glass">
-        <div>
+        <div className="topbar-left">
           <p className="eyebrow">AI Debug RCA</p>
           <h1>Observability Console</h1>
         </div>
-        <div className="status">
-          <span className={`dot ${health === 'ok' ? 'ok' : health === 'down' ? 'down' : ''}`}></span>
-          <span>{health === 'unknown' ? 'Not checked' : `Health: ${health}`}</span>
+        <div className="topbar-right">
+          <div className="status">
+            <span className={`dot ${health === 'ok' ? 'ok' : health === 'down' ? 'down' : ''}`}></span>
+            <span>{health === 'unknown' ? 'Not checked' : `Health: ${health}`}</span>
+          </div>
+          <div className={`conn-chip ${connectionState}`}>
+            {connectionState === 'connected' ? 'API Reachable' : connectionState === 'disconnected' ? 'API Unreachable' : 'Connection Unknown'}
+            {lastConnectedAt ? ` • ${lastConnectedAt}` : ''}
+          </div>
+          <nav className="tabs top-tabs">
+            {[
+              ['settings', 'Settings'],
+              ['ingest', 'Ingest'],
+              ['traces', 'Traces'],
+              ['steps', 'Steps'],
+              ['admin', 'Admin'],
+              ['testing', 'Test Data'],
+            ].map(([key, label]) => (
+              <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key as TabKey)}>
+                {label}
+              </button>
+            ))}
+          </nav>
         </div>
       </header>
 
-      <section className="settings glass">
-        <h2>Connection & Auth</h2>
-        <div className="grid">
-          <label>Backend Base URL<input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} /></label>
-          <label>Tenant ID (dev mode)<input value={tenantId} onChange={(e) => setTenantId(e.target.value)} /></label>
-          <label>API Key (optional)<input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk_test_..." /></label>
-          <label>JWT Bearer (optional)<input value={jwtToken} onChange={(e) => setJwtToken(e.target.value)} placeholder="eyJhbGci..." /></label>
-          <label>Admin Token (admin tab)<input value={adminToken} onChange={(e) => setAdminToken(e.target.value)} /></label>
-        </div>
-        <div className="actions">
-          <button onClick={() => void checkHealth()}>Check Health</button>
-          <button className="secondary" onClick={() => void refreshTraces()}>Refresh Traces</button>
-          <div><strong>Auth mode:</strong> {authSummary}</div>
-        </div>
-      </section>
-
-      <nav className="tabs">
-        {[
-          ['dashboard', 'Dashboard'],
-          ['ingest', 'Ingest'],
-          ['traces', 'Trace Explorer'],
-          ['steps', 'Steps'],
-          ['admin', 'Admin'],
-          ['testing', 'Test Data'],
-        ].map(([key, label]) => (
-          <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key as TabKey)}>{label}</button>
-        ))}
-      </nav>
-
       {error && <div className="alert error">{error}</div>}
-      {toast && <div className="alert toast">{toast}</div>}
 
-      {tab === 'dashboard' && (
-        <section className="panel grid-two">
-          <article className="glass card">
-            <h3>Quick Overview</h3>
-            <p>Recent traces loaded: {traceList.length}</p>
-            <p>Current tenant: {tenantId || 'n/a'}</p>
-            <p>API base: {baseUrl}</p>
-            <div className="actions">
-              <button onClick={() => void refreshTraces()}>Reload Traces</button>
-              <button className="secondary" onClick={() => void checkHealth()}>Ping Health</button>
+      {tab === 'settings' && (
+        <section className="panel">
+          <article className="settings glass card">
+            <h2>Connection & Auth</h2>
+            <p className="muted">Credentials are session-only by default and are not stored in browser localStorage.</p>
+            <div className="grid">
+              <label>Backend Base URL<input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} /></label>
+              <label>Tenant ID (dev mode)<input value={tenantId} onChange={(e) => setTenantId(e.target.value)} /></label>
+              <label>API Key (optional)<input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk_test_..." /></label>
+              <label>JWT Bearer (optional)<input value={jwtToken} onChange={(e) => setJwtToken(e.target.value)} placeholder="eyJhbGci..." /></label>
+              <label>Admin Token (admin tab)<input value={adminToken} onChange={(e) => setAdminToken(e.target.value)} /></label>
             </div>
-          </article>
-          <article className="glass card">
-            <h3>Last 10 Traces</h3>
-            <ul className="list">
-              {traceList.slice(0, 10).map((t) => (
-                <li key={`${t.trace_id}-${t.environment}`}>
-                  <button className="link" onClick={() => { setTraceIdLookup(t.trace_id); setTraceEnvironment(t.environment); setTab('traces') }}>
-                    {t.trace_id.slice(0, 8)}... ({t.status}, {t.step_count} steps)
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className="actions">
+              <button
+                onClick={() => void checkHealth()}
+              >
+                Check Health
+              </button>
+              <button
+                className="secondary"
+                onClick={() => void connectBackend()}
+              >
+                Connect
+              </button>
+              <div><strong>Auth mode:</strong> {authSummary}</div>
+            </div>
+            {toast && <div className="alert toast">{toast}</div>}
           </article>
         </section>
       )}
@@ -377,14 +465,28 @@ function App() {
             <h3>POST /v1/traces</h3>
             <textarea value={singleTraceBody} onChange={(e) => setSingleTraceBody(e.target.value)} />
             <div className="actions">
-              <button onClick={() => void ingestSingleTrace()}>Send Single Trace</button>
+              <button
+                className={busyAction === 'ingest_single' ? 'busy' : ''}
+                disabled={busyAction !== null}
+                onClick={() => void runBusy('ingest_single', ingestSingleTrace)}
+              >
+                {busyAction === 'ingest_single' ? 'Sending...' : 'Send Single Trace'}
+              </button>
               <button className="secondary" onClick={() => setSingleTraceBody(JSON.stringify(buildTrace(tenantId || 'org_demo', 'success', []), null, 2))}>Reset Template</button>
             </div>
           </article>
           <article className="glass card">
             <h3>POST /v1/traces/batch</h3>
             <textarea value={batchBody} onChange={(e) => setBatchBody(e.target.value)} />
-            <div className="actions"><button onClick={() => void ingestBatch()}>Send Batch</button></div>
+            <div className="actions">
+              <button
+                className={busyAction === 'ingest_batch' ? 'busy' : ''}
+                disabled={busyAction !== null}
+                onClick={() => void runBusy('ingest_batch', ingestBatch)}
+              >
+                {busyAction === 'ingest_batch' ? 'Sending...' : 'Send Batch'}
+              </button>
+            </div>
           </article>
         </section>
       )}
@@ -392,24 +494,33 @@ function App() {
       {tab === 'traces' && (
         <section className="panel grid-two">
           <article className="glass card">
-            <h3>Trace Query</h3>
+            <h3>Trace List</h3>
+            <p className="muted">Recent traces loaded: {traceList.length} · API base: {baseUrl}</p>
             <div className="grid">
-              <label>Trace ID<input value={traceIdLookup} onChange={(e) => setTraceIdLookup(e.target.value)} /></label>
-              <label>Environment
-                <select value={traceEnvironment} onChange={(e) => setTraceEnvironment(e.target.value as TraceEnvironment)}>
-                  <option value="prod">prod</option><option value="staging">staging</option><option value="dev">dev</option><option value="critical">critical</option>
-                </select>
-              </label>
               <label>List Limit<input type="number" min={1} max={200} value={traceLimit} onChange={(e) => setTraceLimit(Number(e.target.value))} /></label>
             </div>
             <div className="actions">
-              <button onClick={() => void fetchTraceDetail()}>Fetch Trace + Diagnosis</button>
-              <button className="secondary" onClick={() => void refreshTraces()}>Refresh Trace List</button>
+              <button
+                className={busyAction === 'trace_overview_reload' ? 'busy' : ''}
+                disabled={busyAction !== null}
+                onClick={() => void runBusy('trace_overview_reload', refreshTraces)}
+              >
+                {busyAction === 'trace_overview_reload' ? 'Reloading...' : 'Reload Traces'}
+              </button>
             </div>
             <ul className="list">
               {traceList.map((t) => (
                 <li key={`${t.trace_id}-${t.environment}`}>
-                  <button className="link" onClick={() => { setTraceIdLookup(t.trace_id); setTraceEnvironment(t.environment) }}>
+                  <button
+                    className="link"
+                    onClick={() => {
+                      setTraceIdLookup(t.trace_id)
+                      setTraceEnvironment(t.environment)
+                      void runBusy('trace_select_fetch', async () => {
+                        await fetchTraceDetailFor(t.trace_id, t.environment)
+                      })
+                    }}
+                  >
                     {t.trace_id} • {t.environment} • {t.status}
                   </button>
                 </li>
@@ -417,6 +528,24 @@ function App() {
             </ul>
           </article>
           <article className="glass card">
+            <h3>Trace Detail Query</h3>
+            <div className="grid">
+              <label>Trace ID<input value={traceIdLookup} onChange={(e) => setTraceIdLookup(e.target.value)} /></label>
+              <label>Environment
+                <select value={traceEnvironment} onChange={(e) => setTraceEnvironment(e.target.value as TraceEnvironment)}>
+                  <option value="prod">prod</option><option value="staging">staging</option><option value="dev">dev</option><option value="critical">critical</option>
+                </select>
+              </label>
+            </div>
+            <div className="actions">
+              <button
+                className={busyAction === 'trace_detail' ? 'busy' : ''}
+                disabled={busyAction !== null}
+                onClick={() => void runBusy('trace_detail', fetchTraceDetail)}
+              >
+                {busyAction === 'trace_detail' ? 'Loading...' : 'Fetch Trace + Diagnosis'}
+              </button>
+            </div>
             <h3>Trace JSON</h3>
             <pre>{traceDetail ? JSON.stringify(traceDetail, null, 2) : 'No trace loaded yet.'}</pre>
             <h3>Diagnosis JSON</h3>
@@ -438,7 +567,15 @@ function App() {
                 </select>
               </label>
             </div>
-            <div className="actions"><button onClick={() => void refreshSteps()}>Run Step Query</button></div>
+            <div className="actions">
+              <button
+                className={busyAction === 'steps_query' ? 'busy' : ''}
+                disabled={busyAction !== null}
+                onClick={() => void runBusy('steps_query', refreshSteps)}
+              >
+                {busyAction === 'steps_query' ? 'Running...' : 'Run Step Query'}
+              </button>
+            </div>
           </article>
           <article className="glass card"><h3>Step Results ({steps.length})</h3><pre>{JSON.stringify(steps, null, 2)}</pre></article>
         </section>
@@ -455,8 +592,20 @@ function App() {
               <label>ingest_daily_trace_quota<input type="number" min={0} value={limitQuota} onChange={(e) => setLimitQuota(Number(e.target.value))} /></label>
             </div>
             <div className="actions">
-              <button onClick={() => void fetchLimits()}>Load Limits</button>
-              <button className="secondary" onClick={() => void saveLimits()}>Save Limits</button>
+              <button
+                className={busyAction === 'limits_load' ? 'busy' : ''}
+                disabled={busyAction !== null}
+                onClick={() => void runBusy('limits_load', fetchLimits)}
+              >
+                {busyAction === 'limits_load' ? 'Loading...' : 'Load Limits'}
+              </button>
+              <button
+                className={`secondary ${busyAction === 'limits_save' ? 'busy' : ''}`}
+                disabled={busyAction !== null}
+                onClick={() => void runBusy('limits_save', saveLimits)}
+              >
+                {busyAction === 'limits_save' ? 'Saving...' : 'Save Limits'}
+              </button>
             </div>
           </article>
           <article className="glass card"><h3>Current Limits</h3><pre>{limits ? JSON.stringify(limits, null, 2) : 'No limits loaded.'}</pre></article>
@@ -469,11 +618,11 @@ function App() {
             <h3>Generate Test Data</h3>
             <p className="muted">Browser cannot execute shell scripts directly, so this reproduces script scenarios via API calls.</p>
             <div className="actions wrap">
-              <button onClick={() => void generateScenario('minimal')}>Minimal Trace</button>
-              <button onClick={() => void generateScenario('step_error')}>Step Error Scenario</button>
-              <button onClick={() => void generateScenario('empty_retrieval')}>Empty Retrieval Scenario</button>
-              <button onClick={() => void generateScenario('rag')}>RAG Multi-Step Scenario</button>
-              <button className="secondary" onClick={() => void generateScenario('batch')}>Batch Scenario</button>
+              <button disabled={busyAction !== null} className={busyAction === 'gen_minimal' ? 'busy' : ''} onClick={() => void runBusy('gen_minimal', () => generateScenario('minimal'))}>Minimal Trace</button>
+              <button disabled={busyAction !== null} className={busyAction === 'gen_step_error' ? 'busy' : ''} onClick={() => void runBusy('gen_step_error', () => generateScenario('step_error'))}>Step Error Scenario</button>
+              <button disabled={busyAction !== null} className={busyAction === 'gen_empty_retrieval' ? 'busy' : ''} onClick={() => void runBusy('gen_empty_retrieval', () => generateScenario('empty_retrieval'))}>Empty Retrieval Scenario</button>
+              <button disabled={busyAction !== null} className={busyAction === 'gen_rag' ? 'busy' : ''} onClick={() => void runBusy('gen_rag', () => generateScenario('rag'))}>RAG Multi-Step Scenario</button>
+              <button className={`secondary ${busyAction === 'gen_batch' ? 'busy' : ''}`} disabled={busyAction !== null} onClick={() => void runBusy('gen_batch', () => generateScenario('batch'))}>Batch Scenario</button>
             </div>
           </article>
         </section>
