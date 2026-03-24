@@ -55,9 +55,10 @@ const GRAPH_TOOLTIP_MAX_RADIUS = 230
 type PersistedUiState = {
   baseUrl?: string
   tab?: TabKey
-  traceLimit?: number
 }
 const UI_STATE_KEY = 'rca_ui_state_v1'
+const TRACE_PAGE_SIZE = 10
+const TRACE_SPINNER_MIN_MS = 320
 
 function formatRequestError(e: unknown): string {
   if (e && typeof e === 'object' && 'detail' in e && typeof (e as ApiError).detail === 'string') {
@@ -253,18 +254,12 @@ function App() {
   const toastTimerRef = useRef<number | null>(null)
 
   const [traceList, setTraceList] = useState<TraceSummary[]>([])
-  const [traceLimit, setTraceLimit] = useState(() => {
-    if (typeof window === 'undefined') return 25
-    try {
-      const raw = window.localStorage.getItem(UI_STATE_KEY)
-      if (!raw) return 25
-      const parsed = JSON.parse(raw) as PersistedUiState
-      const val = Number(parsed.traceLimit ?? 25)
-      return Number.isFinite(val) && val > 0 ? val : 25
-    } catch {
-      return 25
-    }
-  })
+  const [traceOffset, setTraceOffset] = useState(0)
+  const [traceHasMore, setTraceHasMore] = useState(true)
+  const [traceLoadingMore, setTraceLoadingMore] = useState(false)
+  const traceListRef = useRef<HTMLUListElement | null>(null)
+  const [traceStatusFilter, setTraceStatusFilter] = useState<'all' | TraceStatus>('all')
+  const [traceEnvFilter, setTraceEnvFilter] = useState<'all' | TraceEnvironment>('all')
   const [traceIdLookup, setTraceIdLookup] = useState('')
   const [traceEnvironment, setTraceEnvironment] = useState<TraceEnvironment>('prod')
   const [traceDetail, setTraceDetail] = useState<Record<string, unknown> | null>(null)
@@ -645,10 +640,9 @@ function App() {
     const data: PersistedUiState = {
       baseUrl,
       tab,
-      traceLimit,
     }
     window.localStorage.setItem(UI_STATE_KEY, JSON.stringify(data))
-  }, [baseUrl, tab, traceLimit])
+  }, [baseUrl, tab])
 
   useEffect(() => {
     void checkHealth(false)
@@ -710,13 +704,51 @@ function App() {
     notify('Connected')
   }
 
-  async function refreshTraces(): Promise<void> {
+  async function refreshTraces(reset = true): Promise<void> {
+    const startedAt = Date.now()
     try {
-      const payload = await apiFetch<{ items: TraceSummary[] }>(`/v1/traces?limit=${traceLimit}&offset=0`)
-      setTraceList(payload.items)
-      notify(`Loaded ${payload.items.length} traces`)
+      const nextOffset = reset ? 0 : traceOffset
+      if (!reset) setTraceLoadingMore(true)
+      const q = new URLSearchParams()
+      q.set('limit', String(TRACE_PAGE_SIZE))
+      q.set('offset', String(nextOffset))
+      if (traceStatusFilter !== 'all') q.set('status', traceStatusFilter)
+      if (traceEnvFilter !== 'all') q.set('environment', traceEnvFilter)
+      const payload = await apiFetch<{ items: TraceSummary[]; has_more?: boolean; limit?: number; offset?: number }>(
+        `/v1/traces?${q.toString()}`,
+      )
+      if (reset) {
+        setTraceList(payload.items)
+      } else {
+        setTraceList((prev) => {
+          const seen = new Set(prev.map((t) => `${t.trace_id}:${t.environment}`))
+          const merged = [...prev]
+          for (const item of payload.items) {
+            const k = `${item.trace_id}:${item.environment}`
+            if (!seen.has(k)) {
+              seen.add(k)
+              merged.push(item)
+            }
+          }
+          return merged
+        })
+      }
+      const loadedCount = payload.items.length
+      const hasMore = Boolean(payload.has_more ?? loadedCount === TRACE_PAGE_SIZE)
+      setTraceHasMore(hasMore)
+      setTraceOffset(nextOffset + loadedCount)
+      notify(reset ? `Loaded ${payload.items.length} traces` : `Loaded ${payload.items.length} more traces`)
     } catch (e) {
       setError(formatRequestError(e))
+    } finally {
+      if (!reset) {
+        const elapsed = Date.now() - startedAt
+        const wait = Math.max(0, TRACE_SPINNER_MIN_MS - elapsed)
+        if (wait > 0) {
+          await new Promise((resolve) => setTimeout(resolve, wait))
+        }
+        setTraceLoadingMore(false)
+      }
     }
   }
 
@@ -725,7 +757,7 @@ function App() {
       const data = JSON.parse(singleTraceBody)
       await apiFetch('/v1/traces', { method: 'POST', body: JSON.stringify(data) })
       notify('Single trace sent')
-      await refreshTraces()
+      await refreshTraces(true)
     } catch (e) {
       if (e instanceof SyntaxError) return setError('Invalid JSON in single trace body')
       setError(formatRequestError(e))
@@ -737,7 +769,7 @@ function App() {
       const data = JSON.parse(batchBody)
       await apiFetch('/v1/traces/batch', { method: 'POST', body: JSON.stringify(data) })
       notify('Batch traces sent')
-      await refreshTraces()
+      await refreshTraces(true)
     } catch (e) {
       if (e instanceof SyntaxError) return setError('Invalid JSON in batch body')
       setError(formatRequestError(e))
@@ -842,11 +874,27 @@ function App() {
         await apiFetch('/v1/traces', { method: 'POST', body: JSON.stringify(buildTrace(tenant, 'success', stepsPayload)) })
       }
       notify(`Generated ${kind} scenario`)
-      await refreshTraces()
+      await refreshTraces(true)
     } catch (e) {
       setError(formatRequestError(e))
     }
   }
+
+  function onTraceListScroll(): void {
+    const el = traceListRef.current
+    if (!el || traceLoadingMore || !traceHasMore) return
+    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 40
+    if (nearBottom) {
+      void refreshTraces(false)
+    }
+  }
+
+  useEffect(() => {
+    if (tab !== 'traces') return
+    void refreshTraces(true)
+    // refresh when entering traces tab or filters change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, traceStatusFilter, traceEnvFilter])
 
   return (
     <div className="app-shell">
@@ -951,20 +999,27 @@ function App() {
           {!graphFocusMode && (
           <article className="glass card trace-list-card">
             <h3>Trace List</h3>
-            <p className="muted">Recent traces loaded: {traceList.length} · API base: {baseUrl}</p>
+            <p className="muted">Showing {traceList.length} trace{traceList.length === 1 ? '' : 's'}.</p>
             <div className="grid">
-              <label>List Limit<input type="number" min={1} max={200} value={traceLimit} onChange={(e) => setTraceLimit(Number(e.target.value))} /></label>
+              <label>Status
+                <select value={traceStatusFilter} onChange={(e) => setTraceStatusFilter(e.target.value as 'all' | TraceStatus)}>
+                  <option value="all">all</option>
+                  <option value="success">success</option>
+                  <option value="error">error</option>
+                  <option value="partial">partial</option>
+                </select>
+              </label>
+              <label>Environment
+                <select value={traceEnvFilter} onChange={(e) => setTraceEnvFilter(e.target.value as 'all' | TraceEnvironment)}>
+                  <option value="all">all</option>
+                  <option value="prod">prod</option>
+                  <option value="staging">staging</option>
+                  <option value="dev">dev</option>
+                  <option value="critical">critical</option>
+                </select>
+              </label>
             </div>
-            <div className="actions">
-              <button
-                className={busyAction === 'trace_overview_reload' ? 'busy' : ''}
-                disabled={busyAction !== null}
-                onClick={() => void runBusy('trace_overview_reload', refreshTraces)}
-              >
-                {busyAction === 'trace_overview_reload' ? 'Reloading...' : 'Reload Traces'}
-              </button>
-            </div>
-            <ul className="list">
+            <ul className="list" ref={traceListRef} onScroll={onTraceListScroll}>
               {traceList.map((t) => (
                 <li key={`${t.trace_id}-${t.environment}`}>
                   <button
@@ -981,6 +1036,13 @@ function App() {
                   </button>
                 </li>
               ))}
+              {traceLoadingMore && (
+                <li className="loading-row">
+                  <span className="spinner"></span>
+                  <span>Loading more traces...</span>
+                </li>
+              )}
+              {!traceHasMore && traceList.length > 0 && <li className="muted">End of trace list.</li>}
             </ul>
           </article>
           )}
@@ -1007,7 +1069,11 @@ function App() {
               <div className="viz-panel">
                 <h3>Execution Graph</h3>
                 {!traceSteps.length ? (
-                  <p className="muted">Load a trace to render its graph.</p>
+                  <p className="muted">
+                    {traceDetail
+                      ? 'This trace is loaded, but it has no steps to visualize.'
+                      : 'Load a trace to render its graph.'}
+                  </p>
                 ) : (
                   <div>
                     <div className="graph-toolbar">
@@ -1127,7 +1193,11 @@ function App() {
               <div className="viz-panel timeline-panel">
                 <h3>Step Timeline</h3>
                 {!traceSteps.length ? (
-                  <p className="muted">No steps yet.</p>
+                  <p className="muted">
+                    {traceDetail
+                      ? 'This trace is loaded, but it has no steps for the timeline.'
+                      : 'Load a trace to view its step timeline.'}
+                  </p>
                 ) : (
                   <ol className="timeline" ref={timelineRef}>
                     {traceSteps.map((step, idx) => {

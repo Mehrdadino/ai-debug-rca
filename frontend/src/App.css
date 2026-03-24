@@ -266,6 +266,23 @@ button.busy::after {
   overflow: auto;
 }
 
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 6px;
+  color: #b8c8ee;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid rgba(130, 158, 232, 0.35);
+  border-top-color: rgba(141, 197, 255, 0.95);
+  animation: spin 700ms linear infinite;
+}
+
 .link {
   width: 100%;
   text-align: left;
@@ -497,6 +514,10 @@ pre {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 @media (max-width: 980px) {
