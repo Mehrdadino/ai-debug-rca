@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import admin_limits, health, traces
 from app.config import settings
@@ -23,6 +24,16 @@ app = FastAPI(
     description="AI debugging & root-cause analysis — durable async ingest, list, diagnosis",
     version="0.4.0",
     lifespan=lifespan,
+)
+
+# Browser UI (Vite dev server, etc.) runs on a different origin than the API; without CORS,
+# fetch() is blocked and buttons appear to do nothing.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(health.router)

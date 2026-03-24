@@ -41,38 +41,44 @@ python3 -m alembic upgrade head
 python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Use **`python3 -m uvicorn`** so the same interpreter that has FastAPI/uvicorn is used. The bare `uvicorn` command only works if that interpreter’s `bin` directory is on your `PATH` (e.g. after `source .venv/bin/activate`).
+Use `**python3 -m uvicorn**` so the same interpreter that has FastAPI/uvicorn is used. The bare `uvicorn` command only works if that interpreter’s `bin` directory is on your `PATH` (e.g. after `source .venv/bin/activate`).
+
+### Web UI (Vite) + CORS
+
+The React app in `../frontend` runs on a different origin (e.g. `http://localhost:5173`) than the API (`http://127.0.0.1:8000`). The API enables **CORS** for `localhost` / `127.0.0.1` on any port so browser `fetch()` works. Restart the API after pulling changes if buttons in the UI did nothing before.
 
 ### Environment
 
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `RCA_DATABASE_URL` | `sqlite+aiosqlite:///./data/app.db` | Async SQLAlchemy URL. For Postgres use `postgresql+asyncpg://user:pass@host:5433/dbname` |
-| `RCA_INGEST_SYNC` | `0` (false) | If `1` / `true`, `POST /v1/traces` writes in the request and returns **201**. If false, traces are first persisted to the `ingest_jobs` backlog and API returns **202**; worker drains backlog to `traces`. |
-| `RCA_INGEST_QUEUE_MAXSIZE` | `10000` | Max backlog row count (`ingest_jobs`) before API returns **503** |
-| `RCA_INGEST_BATCH_MAX_SIZE` | `100` | Max items accepted by `POST /v1/traces/batch` |
-| `RCA_INGEST_CLAIM_TIMEOUT_SECONDS` | `60` | Background worker claim lease timeout; stale `processing` jobs become reclaimable |
-| `RCA_INGEST_RETRY_DELAY_SECONDS` | `5` | Delay before retrying failed background ingest jobs |
-| `RCA_INGEST_MAX_ATTEMPTS` | `5` | Max background attempts before moving job to `dead` state |
-| `RCA_INGEST_RATE_LIMIT_RPS` | `0` (disabled) | Per-tenant ingest request limit (requests/second). When exceeded, API returns **429** with `Retry-After`. |
-| `RCA_INGEST_DAILY_TRACE_QUOTA` | `0` (disabled) | Per-tenant ingest quota (trace count/day UTC). Applied to single and batch ingest. Exceeding returns **429** with `Retry-After`. |
-| `RCA_API_KEYS` | *(empty)* | JSON object mapping API key → `tenant_id`, e.g. `{"sk_live_xxx":"org_123"}`. When set, clients must send **`Authorization: Bearer <key>`** or **`X-API-Key`**; **`X-Tenant-ID` is not used for auth** (body `tenant_id` must still match the resolved tenant). When empty, local/dev behavior uses **`X-Tenant-ID`** only. |
-| `RCA_JWT_SECRET` | *(empty / disabled)* | Enables bearer JWT auth when set. API resolves tenant from JWT claim (`RCA_JWT_TENANT_CLAIM`, default `tenant_id`). |
-| `RCA_JWT_ALGORITHM` | `HS256` | JWT verification algorithm (HMAC path for now). |
-| `RCA_JWT_TENANT_CLAIM` | `tenant_id` | Claim name containing tenant binding. |
-| `RCA_JWT_ISSUER` | *(empty / optional)* | Optional expected JWT `iss`. |
-| `RCA_JWT_AUDIENCE` | *(empty / optional)* | Optional expected JWT `aud`. |
-| `RCA_ADMIN_TOKEN` | *(empty / disabled)* | Enables admin APIs for per-tenant limits via `X-Admin-Token`. |
+
+| Variable                           | Default                             | Meaning                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RCA_DATABASE_URL`                 | `sqlite+aiosqlite:///./data/app.db` | Async SQLAlchemy URL. For Postgres use `postgresql+asyncpg://user:pass@host:5433/dbname`                                                                                                                                                                                                                                   |
+| `RCA_INGEST_SYNC`                  | `0` (false)                         | If `1` / `true`, `POST /v1/traces` writes in the request and returns **201**. If false, traces are first persisted to the `ingest_jobs` backlog and API returns **202**; worker drains backlog to `traces`.                                                                                                                |
+| `RCA_INGEST_QUEUE_MAXSIZE`         | `10000`                             | Max backlog row count (`ingest_jobs`) before API returns **503**                                                                                                                                                                                                                                                           |
+| `RCA_INGEST_BATCH_MAX_SIZE`        | `100`                               | Max items accepted by `POST /v1/traces/batch`                                                                                                                                                                                                                                                                              |
+| `RCA_INGEST_CLAIM_TIMEOUT_SECONDS` | `60`                                | Background worker claim lease timeout; stale `processing` jobs become reclaimable                                                                                                                                                                                                                                          |
+| `RCA_INGEST_RETRY_DELAY_SECONDS`   | `5`                                 | Delay before retrying failed background ingest jobs                                                                                                                                                                                                                                                                        |
+| `RCA_INGEST_MAX_ATTEMPTS`          | `5`                                 | Max background attempts before moving job to `dead` state                                                                                                                                                                                                                                                                  |
+| `RCA_INGEST_RATE_LIMIT_RPS`        | `0` (disabled)                      | Per-tenant ingest request limit (requests/second). When exceeded, API returns **429** with `Retry-After`.                                                                                                                                                                                                                  |
+| `RCA_INGEST_DAILY_TRACE_QUOTA`     | `0` (disabled)                      | Per-tenant ingest quota (trace count/day UTC). Applied to single and batch ingest. Exceeding returns **429** with `Retry-After`.                                                                                                                                                                                           |
+| `RCA_API_KEYS`                     | *(empty)*                           | JSON object mapping API key → `tenant_id`, e.g. `{"sk_live_xxx":"org_123"}`. When set, clients must send `**Authorization: Bearer <key>`** or `**X-API-Key**`; `**X-Tenant-ID` is not used for auth** (body `tenant_id` must still match the resolved tenant). When empty, local/dev behavior uses `**X-Tenant-ID`** only. |
+| `RCA_JWT_SECRET`                   | *(empty / disabled)*                | Enables bearer JWT auth when set. API resolves tenant from JWT claim (`RCA_JWT_TENANT_CLAIM`, default `tenant_id`).                                                                                                                                                                                                        |
+| `RCA_JWT_ALGORITHM`                | `HS256`                             | JWT verification algorithm (HMAC path for now).                                                                                                                                                                                                                                                                            |
+| `RCA_JWT_TENANT_CLAIM`             | `tenant_id`                         | Claim name containing tenant binding.                                                                                                                                                                                                                                                                                      |
+| `RCA_JWT_ISSUER`                   | *(empty / optional)*                | Optional expected JWT `iss`.                                                                                                                                                                                                                                                                                               |
+| `RCA_JWT_AUDIENCE`                 | *(empty / optional)*                | Optional expected JWT `aud`.                                                                                                                                                                                                                                                                                               |
+| `RCA_ADMIN_TOKEN`                  | *(empty / disabled)*                | Enables admin APIs for per-tenant limits via `X-Admin-Token`.                                                                                                                                                                                                                                                              |
+
 
 For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace, then `GET` it (may need a short delay while worker drains backlog).
 
-- OpenAPI: http://127.0.0.1:8000/docs  
+- OpenAPI: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)  
 - Ingest: `POST /v1/traces` with auth as above; bearer token may be API key or JWT. JSON `tenant_id` must match the authenticated tenant (**201** if sync ingest, **202** if queued)  
 - Batch ingest: `POST /v1/traces/batch` with body `{ "traces": [...] }` and the same auth headers  
   - **201** when all items are synchronously accepted, **202** when all are queued, **207** for mixed outcomes  
   - SDK-friendly item fields: `status`, `http_status`, optional `error_code`, optional `detail`
 - Rate/quota failures return **429** with `Retry-After` and a retry hint in `detail`.
-- List: `GET /v1/traces?limit=&offset=&status=&environment=&started_at_from=&started_at_to=` — optional filters; time bounds are **inclusive** on **`started_at`** (run time), ISO-8601  
+- List: `GET /v1/traces?limit=&offset=&status=&environment=&started_at_from=&started_at_to=` — optional filters; time bounds are **inclusive** on `**started_at*`* (run time), ISO-8601  
 - Steps query: `GET /v1/traces/steps?step_type=&has_error=&days=&environment=&limit=&offset=` — fast step-index query (supports failures/success/all; default `days=7`)
 - Backward-compatible alias: `GET /v1/traces/steps/failures?...` (equivalent to `has_error=true`)
 - Fetch: `GET /v1/traces/{trace_id}?environment=prod|staging|dev|critical` (defaults to `prod`)  
@@ -101,7 +107,7 @@ python3 -m alembic upgrade head
 
 ## Data model notes
 
-- **`UNIQUE (tenant_id, environment, trace_id)`** on `traces`, `diagnoses`, and `ingest_jobs` — same UUID may exist under different tenants or environments; **409** if the triple collides for the authenticated tenant.
+- `**UNIQUE (tenant_id, environment, trace_id)**` on `traces`, `diagnoses`, and `ingest_jobs` — same UUID may exist under different tenants or environments; **409** if the triple collides for the authenticated tenant.
 - Environment is a first-class dimension: `prod|staging|dev|critical` (default `prod`).
 - Current rate limiter is **in-process** (per API process). For multi-instance deployments, move rate/quota state to shared storage (e.g. Redis/Postgres).
 - Per-tenant policy overrides are persisted in `tenant_limits` and applied before global defaults.
@@ -109,6 +115,7 @@ python3 -m alembic upgrade head
 
 ## Next implementation steps (see `plan.md` §19)
 
-1. **PostgreSQL** + object storage when moving off single-file SQLite for staging/prod.  
-2. **Distributed rate-limiter backend** (Redis/Postgres counters) for multi-instance API nodes.  
+1. **PostgreSQL** + object storage when moving off single-file SQLite for staging/prod.
+2. **Distributed rate-limiter backend** (Redis/Postgres counters) for multi-instance API nodes.
 3. **Python SDK**, **Web UI**, **LLM explainer** — as in `plan.md`.
+
