@@ -58,6 +58,7 @@ type PersistedUiState = {
 }
 const UI_STATE_KEY = 'rca_ui_state_v1'
 const TRACE_PAGE_SIZE = 10
+const STEPS_PAGE_SIZE = 20
 const TRACE_SPINNER_MIN_MS = 320
 
 function formatRequestError(e: unknown): string {
@@ -274,6 +275,9 @@ function App() {
   const [tooltipStepId, setTooltipStepId] = useState('')
   const graphViewportRef = useRef<HTMLDivElement | null>(null)
   const timelineRef = useRef<HTMLOListElement | null>(null)
+  /** When opening a trace from the Steps tab, select this step after load (consumed in traceSteps effect). */
+  const pendingGraphFocusRef = useRef<string | null>(null)
+  const stepRowNavTimerRef = useRef<number | null>(null)
   const zoomRef = useRef(1)
   const panRef = useRef({ x: 0, y: 0 })
   const panDragRef = useRef<{ active: boolean; startX: number; startY: number; startPanX: number; startPanY: number }>({
@@ -292,6 +296,12 @@ function App() {
   })
 
   const [steps, setSteps] = useState<StepSummary[]>([])
+  const [stepsOffset, setStepsOffset] = useState(0)
+  const [stepsHasMore, setStepsHasMore] = useState(false)
+  const [stepsLoadingMore, setStepsLoadingMore] = useState(false)
+  const [stepsEverQueried, setStepsEverQueried] = useState(false)
+  const [stepsListLoading, setStepsListLoading] = useState(false)
+  const stepsListRef = useRef<HTMLDivElement | null>(null)
   const [stepsType, setStepsType] = useState('')
   const [stepsDays, setStepsDays] = useState(7)
   const [stepsErrorOnly, setStepsErrorOnly] = useState<boolean | null>(true)
@@ -354,6 +364,16 @@ function App() {
       setSelectedStepId('')
       setTooltipPos(null)
       setTooltipStepId('')
+      return
+    }
+    const pending = pendingGraphFocusRef.current
+    if (pending && traceSteps.some((s) => s.step_id === pending)) {
+      setSelectedStepId(pending)
+      pendingGraphFocusRef.current = null
+      requestAnimationFrame(() => {
+        centerGraphOnStep(pending)
+        openTooltipForStep(pending)
+      })
       return
     }
     setSelectedStepId((prev) => (prev && traceSteps.some((s) => s.step_id === prev) ? prev : traceSteps[0].step_id))
@@ -650,6 +670,22 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    return () => {
+      if (stepRowNavTimerRef.current !== null) {
+        window.clearTimeout(stepRowNavTimerRef.current)
+        stepRowNavTimerRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (tab !== 'steps' && stepRowNavTimerRef.current !== null) {
+      window.clearTimeout(stepRowNavTimerRef.current)
+      stepRowNavTimerRef.current = null
+    }
+  }, [tab])
+
   async function apiFetch<T>(path: string, init?: RequestInit, includeAdminToken = false): Promise<T> {
     setError('')
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -776,20 +812,38 @@ function App() {
     }
   }
 
+  function tracePayloadHasStepId(payload: Record<string, unknown>, stepId: string): boolean {
+    const stepsRaw = payload.steps
+    if (!Array.isArray(stepsRaw)) return false
+    for (const raw of stepsRaw) {
+      const rec = asRecord(raw)
+      if (rec && String(rec.step_id ?? '').trim() === stepId) return true
+    }
+    return false
+  }
+
   async function fetchTraceDetailFor(
     traceId: string,
     env: TraceEnvironment,
-    opts?: { notifyOnSuccess?: boolean },
+    opts?: { notifyOnSuccess?: boolean; focusStepId?: string | null },
   ): Promise<void> {
+    const wantFocus = opts?.focusStepId?.trim() ?? ''
+    if (!wantFocus) pendingGraphFocusRef.current = null
     try {
       const t = await apiFetch<Record<string, unknown>>(`/v1/traces/${traceId}?environment=${env}`)
       const d = await apiFetch<Record<string, unknown>>(`/v1/traces/${traceId}/diagnosis?environment=${env}`)
+      let openedWithStep = false
+      if (wantFocus) {
+        openedWithStep = tracePayloadHasStepId(t, wantFocus)
+        pendingGraphFocusRef.current = openedWithStep ? wantFocus : null
+      }
       setTraceDetail(t)
       setDiagnosis(d)
       if (opts?.notifyOnSuccess) {
-        notify('Trace and diagnosis loaded')
+        notify(openedWithStep ? 'Trace opened with selected step' : 'Trace and diagnosis loaded')
       }
     } catch (e) {
+      pendingGraphFocusRef.current = null
       setError(formatRequestError(e))
       setTraceDetail(null)
       setDiagnosis(null)
@@ -801,18 +855,98 @@ function App() {
     await fetchTraceDetailFor(traceIdLookup.trim(), traceEnvironment, { notifyOnSuccess: true })
   }
 
-  async function refreshSteps(): Promise<void> {
+  async function openTraceFromStepSummary(item: StepSummary): Promise<void> {
+    setTab('traces')
+    setTraceIdLookup(item.trace_id)
+    setTraceEnvironment(item.environment)
+    await fetchTraceDetailFor(item.trace_id, item.environment, {
+      notifyOnSuccess: true,
+      focusStepId: item.step_id,
+    })
+  }
+
+  function handleStepRowClick(row: StepSummary, e: MouseEvent<HTMLTableRowElement>): void {
+    if (e.button !== 0) return
+    if (window.getSelection()?.toString().trim()) return
+    if (e.detail >= 2) {
+      if (stepRowNavTimerRef.current !== null) {
+        window.clearTimeout(stepRowNavTimerRef.current)
+        stepRowNavTimerRef.current = null
+      }
+      return
+    }
+    if (stepRowNavTimerRef.current !== null) window.clearTimeout(stepRowNavTimerRef.current)
+    stepRowNavTimerRef.current = window.setTimeout(() => {
+      stepRowNavTimerRef.current = null
+      if (window.getSelection()?.toString().trim()) return
+      void runBusy('steps_open_trace', () => openTraceFromStepSummary(row))
+    }, 280)
+  }
+
+  function handleStepRowDoubleClick(): void {
+    if (stepRowNavTimerRef.current !== null) {
+      window.clearTimeout(stepRowNavTimerRef.current)
+      stepRowNavTimerRef.current = null
+    }
+  }
+
+  async function refreshSteps(reset = true): Promise<void> {
+    const startedAt = Date.now()
+    if (reset) setStepsListLoading(true)
     try {
+      const nextOffset = reset ? 0 : stepsOffset
+      if (!reset) setStepsLoadingMore(true)
       const q = new URLSearchParams()
       q.set('days', String(stepsDays))
-      q.set('limit', '100')
+      q.set('limit', String(STEPS_PAGE_SIZE))
+      q.set('offset', String(nextOffset))
       if (stepsType.trim()) q.set('step_type', stepsType.trim().toLowerCase())
       if (stepsErrorOnly !== null) q.set('has_error', String(stepsErrorOnly))
-      const payload = await apiFetch<{ items: StepSummary[] }>(`/v1/traces/steps?${q.toString()}`)
-      setSteps(payload.items)
-      notify(`Loaded ${payload.items.length} step records`)
+      const payload = await apiFetch<{ items: StepSummary[]; has_more?: boolean }>(`/v1/traces/steps?${q.toString()}`)
+      if (reset) {
+        setSteps(payload.items)
+      } else {
+        setSteps((prev) => {
+          const seen = new Set(prev.map((s) => `${s.trace_id}:${s.step_id}:${s.trace_started_at}`))
+          const merged = [...prev]
+          for (const item of payload.items) {
+            const k = `${item.trace_id}:${item.step_id}:${item.trace_started_at}`
+            if (!seen.has(k)) {
+              seen.add(k)
+              merged.push(item)
+            }
+          }
+          return merged
+        })
+      }
+      const loadedCount = payload.items.length
+      const hasMore = Boolean(payload.has_more ?? loadedCount === STEPS_PAGE_SIZE)
+      setStepsHasMore(hasMore)
+      setStepsOffset(nextOffset + loadedCount)
+      notify(reset ? `Loaded ${payload.items.length} steps` : `Loaded ${payload.items.length} more steps`)
     } catch (e) {
       setError(formatRequestError(e))
+    } finally {
+      if (reset) {
+        setStepsListLoading(false)
+        setStepsEverQueried(true)
+      } else {
+        const elapsed = Date.now() - startedAt
+        const wait = Math.max(0, TRACE_SPINNER_MIN_MS - elapsed)
+        if (wait > 0) {
+          await new Promise((resolve) => setTimeout(resolve, wait))
+        }
+        setStepsLoadingMore(false)
+      }
+    }
+  }
+
+  function onStepsListScroll(): void {
+    const el = stepsListRef.current
+    if (!el || stepsLoadingMore || !stepsHasMore || busyAction !== null) return
+    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 40
+    if (nearBottom) {
+      void refreshSteps(false)
     }
   }
 
@@ -895,6 +1029,13 @@ function App() {
     // refresh when entering traces tab or filters change
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, traceStatusFilter, traceEnvFilter])
+
+  useEffect(() => {
+    if (tab !== 'steps') return
+    void refreshSteps(true)
+    // refresh when entering steps tab or filters change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, stepsType, stepsDays, stepsErrorOnly])
 
   return (
     <div className="app-shell">
@@ -1245,10 +1386,10 @@ function App() {
       )}
 
       {tab === 'steps' && (
-        <section className="panel grid-two">
-          <article className="glass card">
+        <section className="panel grid-two steps-layout">
+          <article className="glass card steps-query-card">
             <h3>GET /v1/traces/steps</h3>
-            <div className="grid">
+            <div className="steps-query-fields">
               <label>Step Type<input value={stepsType} onChange={(e) => setStepsType(e.target.value)} placeholder="tool_call" /></label>
               <label>Days<input type="number" min={1} max={365} value={stepsDays} onChange={(e) => setStepsDays(Number(e.target.value))} /></label>
               <label>has_error
@@ -1257,17 +1398,66 @@ function App() {
                 </select>
               </label>
             </div>
-            <div className="actions">
-              <button
-                className={busyAction === 'steps_query' ? 'busy' : ''}
-                disabled={busyAction !== null}
-                onClick={() => void runBusy('steps_query', refreshSteps)}
-              >
-                {busyAction === 'steps_query' ? 'Running...' : 'Run Step Query'}
-              </button>
-            </div>
           </article>
-          <article className="glass card"><h3>Step Results ({steps.length})</h3><pre>{JSON.stringify(steps, null, 2)}</pre></article>
+          <article className="glass card step-results-card">
+            <h3>Step Results ({steps.length})</h3>
+            <p className="muted">
+              Click a row to open that trace on the Traces tab with the step selected.
+            </p>
+            {steps.length === 0 ? (
+              <p className="muted">
+                {stepsListLoading ? 'Loading…' : stepsEverQueried ? 'No steps matched your filters.' : 'Loading…'}
+              </p>
+            ) : (
+              <div className="step-results-scroll" ref={stepsListRef} onScroll={onStepsListScroll}>
+                <table className="step-results-table">
+                  <thead>
+                    <tr>
+                      <th>trace_id</th>
+                      <th>step_id</th>
+                      <th>type</th>
+                      <th>env</th>
+                      <th>started</th>
+                      <th>error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {steps.map((row) => (
+                      <tr
+                        key={`${row.trace_id}-${row.step_id}-${row.trace_started_at}`}
+                        className="step-results-row"
+                        tabIndex={0}
+                        onClick={(e) => handleStepRowClick(row, e)}
+                        onDoubleClick={handleStepRowDoubleClick}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            void runBusy('steps_open_trace', () => openTraceFromStepSummary(row))
+                          }
+                        }}
+                      >
+                        <td className="mono">{row.trace_id}</td>
+                        <td className="mono">{row.step_id}</td>
+                        <td>{row.step_type}</td>
+                        <td>{row.environment}</td>
+                        <td>{row.trace_started_at}</td>
+                        <td className={row.error ? 'step-error-cell' : 'step-error-cell empty'}>{row.error ?? ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {stepsLoadingMore && (
+                  <div className="loading-row steps-loading-more">
+                    <span className="spinner"></span>
+                    <span>Loading more steps...</span>
+                  </div>
+                )}
+                {!stepsHasMore && steps.length > 0 && (
+                  <p className="muted steps-end-note">End of results.</p>
+                )}
+              </div>
+            )}
+          </article>
         </section>
       )}
 
