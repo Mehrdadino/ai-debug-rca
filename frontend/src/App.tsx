@@ -270,6 +270,7 @@ function App() {
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [lastPointer, setLastPointer] = useState<{ x: number; y: number } | null>(null)
   const graphViewportRef = useRef<HTMLDivElement | null>(null)
+  const timelineRef = useRef<HTMLOListElement | null>(null)
   const zoomRef = useRef(1)
   const panRef = useRef({ x: 0, y: 0 })
   const panDragRef = useRef<{ active: boolean; startX: number; startY: number; startPanX: number; startPanY: number }>({
@@ -322,6 +323,14 @@ function App() {
     const height = Math.max(240, ...visualNodes.map((n) => n.y + 110))
     return { width, height }
   }, [visualNodes])
+  const graphBounds = useMemo(() => {
+    if (!visualNodes.length) return { minX: 0, minY: 0, width: 680, height: 220 }
+    const minX = Math.min(...visualNodes.map((n) => n.x))
+    const minY = Math.min(...visualNodes.map((n) => n.y))
+    const maxX = Math.max(...visualNodes.map((n) => n.x + 80))
+    const maxY = Math.max(...visualNodes.map((n) => n.y + 48))
+    return { minX, minY, width: maxX - minX, height: maxY - minY }
+  }, [visualNodes])
   const visualNodeById = useMemo(() => {
     const m = new Map<string, VisualNode>()
     for (const n of visualNodes) m.set(n.id, n)
@@ -345,12 +354,12 @@ function App() {
     const vw = Math.max(240, viewport.clientWidth)
     const vh = Math.max(200, viewport.clientHeight)
     const pad = 24
-    const scaleX = (vw - pad * 2) / Math.max(1, graphCanvas.width)
-    const scaleY = (vh - pad * 2) / Math.max(1, graphCanvas.height)
+    const scaleX = (vw - pad * 2) / Math.max(1, graphBounds.width)
+    const scaleY = (vh - pad * 2) / Math.max(1, graphBounds.height)
     const fitted = Math.min(scaleX, scaleY)
     const nextZoom = Math.max(0.45, Math.min(2.4, fitted))
-    const x = (vw - graphCanvas.width * nextZoom) / 2
-    const y = (vh - graphCanvas.height * nextZoom) / 2
+    const x = (vw - graphBounds.width * nextZoom) / 2 - graphBounds.minX * nextZoom
+    const y = (vh - graphBounds.height * nextZoom) / 2 - graphBounds.minY * nextZoom
     setZoom(nextZoom)
     setPan({ x, y })
   }
@@ -362,7 +371,7 @@ function App() {
     })
     // Fit whenever graph topology changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visualNodes.length, graphCanvas.width, graphCanvas.height])
+  }, [visualNodes.length, graphCanvas.width, graphCanvas.height, graphBounds.minX, graphBounds.minY, graphBounds.width, graphBounds.height])
 
   useEffect(() => {
     const viewport = graphViewportRef.current
@@ -372,7 +381,7 @@ function App() {
     return () => observer.disconnect()
     // Keep graph centered when viewport size changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visualNodes.length, graphCanvas.width, graphCanvas.height])
+  }, [visualNodes.length, graphCanvas.width, graphCanvas.height, graphBounds.minX, graphBounds.minY, graphBounds.width, graphBounds.height])
 
   useEffect(() => {
     zoomRef.current = zoom
@@ -392,6 +401,21 @@ function App() {
     setPan({
       x: vx - graphX * nextZoom,
       y: vy - graphY * nextZoom,
+    })
+  }
+
+  function centerGraphOnStep(stepId: string): void {
+    const viewport = graphViewportRef.current
+    const node = visualNodeById.get(stepId)
+    if (!viewport || !node) return
+    const vw = Math.max(240, viewport.clientWidth)
+    const vh = Math.max(200, viewport.clientHeight)
+    const nodeCx = node.x + 40
+    const nodeCy = node.y + 24
+    const currentZoom = zoomRef.current
+    setPan({
+      x: vw / 2 - nodeCx * currentZoom,
+      y: vh / 2 - nodeCy * currentZoom,
     })
   }
 
@@ -433,6 +457,12 @@ function App() {
   function onGraphMouseUp(): void {
     panDragRef.current.active = false
   }
+
+  useEffect(() => {
+    if (!selectedStepId || !timelineRef.current) return
+    const el = timelineRef.current.querySelector<HTMLElement>(`[data-step-id="${selectedStepId}"]`)
+    if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [selectedStepId])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -814,7 +844,6 @@ function App() {
                       ref={graphViewportRef}
                       className="graph-wrap"
                       onWheelCapture={onGraphWheel}
-                      onWheel={onGraphWheel}
                       onMouseDown={onGraphMouseDown}
                       onMouseMove={onGraphMouseMove}
                       onMouseUp={onGraphMouseUp}
@@ -885,14 +914,18 @@ function App() {
                 {!traceSteps.length ? (
                   <p className="muted">No steps yet.</p>
                 ) : (
-                  <ol className="timeline">
+                  <ol className="timeline" ref={timelineRef}>
                     {traceSteps.map((step, idx) => {
                       const active = step.step_id === selectedStepId
                       return (
                         <li
                           key={step.step_id}
+                          data-step-id={step.step_id}
                           className={active ? 'timeline-item active' : 'timeline-item'}
-                          onClick={() => setSelectedStepId(step.step_id)}
+                          onClick={() => {
+                            setSelectedStepId(step.step_id)
+                            centerGraphOnStep(step.step_id)
+                          }}
                         >
                           <div className="timeline-index">{idx + 1}</div>
                           <div>
