@@ -1565,7 +1565,7 @@ function App() {
                         <li
                           key={step.step_id}
                           data-step-id={step.step_id}
-                          className={active ? 'timeline-item active' : 'timeline-item'}
+                          className={`timeline-item${active ? ' active' : ''}${step.error ? ' has-error' : ''}`}
                           onClick={() => {
                             setSelectedStepId(step.step_id)
                             centerGraphOnStep(step.step_id)

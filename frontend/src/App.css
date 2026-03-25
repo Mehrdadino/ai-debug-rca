@@ -486,8 +486,17 @@ pre {
   cursor: pointer;
 }
 
+.timeline-item.has-error {
+  border-color: rgba(248, 113, 113, 0.8);
+}
+
 .timeline-item.active {
   border-color: rgba(116, 219, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(116, 219, 255, 0.3);
+}
+
+.timeline-item.active.has-error {
+  border-color: rgba(248, 113, 113, 0.8);
   box-shadow: 0 0 0 1px rgba(116, 219, 255, 0.3);
 }
 
