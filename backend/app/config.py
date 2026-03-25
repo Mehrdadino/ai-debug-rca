@@ -83,5 +83,19 @@ class Settings(BaseSettings):
             return Path(self.database_url.removeprefix("sqlite+aiosqlite:///./"))
         return None
 
+    s3_bucket: str = ""
+    """When non-empty, full trace JSON is stored here; `traces.payload` is empty and `blob_key` is set."""
+
+    s3_endpoint_url: str = ""
+    """Optional S3-compatible endpoint (e.g. http://127.0.0.1:9000 for MinIO). Empty uses default AWS."""
+
+    s3_region: str = "us-east-1"
+
+    s3_access_key_id: str = ""
+    """Optional; when empty, boto3 uses standard AWS env/credential chain."""
+
+    s3_secret_access_key: str = ""
+    """Optional; when empty, boto3 uses standard AWS env/credential chain."""
+
 
 settings = Settings()

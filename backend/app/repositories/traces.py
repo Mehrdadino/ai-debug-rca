@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
@@ -10,6 +11,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DiagnosisRecord, TraceRecord, TraceStepRecord
 from app.models.trace import Trace
+from botocore.exceptions import ClientError
+
+from app.services.blob_storage import (
+    blob_storage_enabled,
+    delete_trace_blob,
+    get_trace_blob,
+    is_not_found_error,
+    put_trace_blob,
+    trace_blob_key,
+)
 from app.services.rules_engine import evaluate_trace
 
 
@@ -17,8 +28,24 @@ class TraceConflictError(Exception):
     """(tenant_id, trace_id) already exists for this tenant."""
 
 
+class TraceBlobMissingError(Exception):
+    """Full trace JSON not available (blob missing or empty row)."""
+
+
 async def insert_trace(session: AsyncSession, trace: Trace) -> TraceRecord:
     payload = trace.model_dump(mode="json")
+    step_count = len(trace.steps)
+    blob_key: Optional[str] = None
+    blob_etag: Optional[str] = None
+    row_payload: dict = payload
+
+    if blob_storage_enabled():
+        key = trace_blob_key(trace.tenant_id, str(trace.trace_id))
+        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        blob_etag = await put_trace_blob(key, body)
+        blob_key = key
+        row_payload = {}
+
     row = TraceRecord(
         trace_id=str(trace.trace_id),
         tenant_id=trace.tenant_id,
@@ -26,7 +53,10 @@ async def insert_trace(session: AsyncSession, trace: Trace) -> TraceRecord:
         status=trace.status.value,
         started_at=trace.started_at,
         ended_at=trace.ended_at,
-        payload=payload,
+        step_count=step_count,
+        payload=row_payload,
+        blob_key=blob_key,
+        blob_etag=blob_etag,
     )
     session.add(row)
     diagnosis = evaluate_trace(trace)
@@ -61,9 +91,27 @@ async def insert_trace(session: AsyncSession, trace: Trace) -> TraceRecord:
         await session.commit()
     except IntegrityError as e:
         await session.rollback()
+        if blob_key:
+            await delete_trace_blob(blob_key)
         raise TraceConflictError from e
     await session.refresh(row)
     return row
+
+
+async def read_trace_payload_dict(row: TraceRecord) -> dict:
+    """Full canonical trace document for API responses (from DB JSON or object storage)."""
+    if row.blob_key:
+        try:
+            raw = await get_trace_blob(row.blob_key)
+        except ClientError as e:
+            if is_not_found_error(e):
+                raise TraceBlobMissingError from e
+            raise
+        return json.loads(raw.decode("utf-8"))
+    pl = row.payload
+    if not pl:
+        raise TraceBlobMissingError
+    return pl
 
 
 async def get_trace_by_id(

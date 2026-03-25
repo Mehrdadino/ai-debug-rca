@@ -18,11 +18,13 @@ from app.models.trace import Trace, TraceEnvironment, TraceStatus
 from app.repositories.diagnosis import get_diagnosis_for_trace
 from app.repositories.tenant_limits import get_tenant_limits
 from app.repositories.traces import (
+    TraceBlobMissingError,
     TraceConflictError,
     get_trace_by_id,
     insert_trace,
     list_steps,
     list_traces,
+    read_trace_payload_dict,
     trace_exists,
 )
 from app.services.ingest_worker import (
@@ -157,8 +159,14 @@ def _row_to_step_summary(row: TraceStepRecord) -> StepSummary:
     )
 
 
+def _trace_step_count_for_summary(row: TraceRecord) -> int:
+    if getattr(row, "step_count", None):
+        return int(row.step_count)
+    steps = (row.payload or {}).get("steps") or []
+    return len(steps) if isinstance(steps, list) else 0
+
+
 def _row_to_summary(row: TraceRecord) -> TraceSummary:
-    steps = row.payload.get("steps") or []
     return TraceSummary(
         trace_id=UUID(row.trace_id),
         tenant_id=row.tenant_id,
@@ -166,7 +174,7 @@ def _row_to_summary(row: TraceRecord) -> TraceSummary:
         status=TraceStatus(row.status),
         started_at=row.started_at.isoformat(),
         ended_at=row.ended_at.isoformat() if row.ended_at else None,
-        step_count=len(steps) if isinstance(steps, list) else 0,
+        step_count=_trace_step_count_for_summary(row),
     )
 
 
@@ -491,4 +499,8 @@ async def get_trace(
         raise HTTPException(status_code=404, detail="trace not found")
     if row.environment != environment.value:
         raise HTTPException(status_code=404, detail="trace not found for this environment")
-    return Trace.model_validate(row.payload)
+    try:
+        payload_dict = await read_trace_payload_dict(row)
+    except TraceBlobMissingError:
+        raise HTTPException(status_code=404, detail="trace payload not found") from None
+    return Trace.model_validate(payload_dict)

@@ -14,7 +14,7 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -U pip
-pip install "fastapi>=0.115" "uvicorn[standard]>=0.32" "pydantic>=2.10" "pydantic-settings>=2.6" "sqlalchemy[asyncio]>=2.0.36" "aiosqlite>=0.20" "asyncpg>=0.30" "psycopg[binary]>=3.2" "PyJWT>=2.9" "alembic>=1.14"
+pip install "fastapi>=0.115" "uvicorn[standard]>=0.32" "pydantic>=2.10" "pydantic-settings>=2.6" "sqlalchemy[asyncio]>=2.0.36" "aiosqlite>=0.20" "asyncpg>=0.30" "psycopg[binary]>=3.2" "PyJWT>=2.9" "alembic>=1.14" "boto3>=1.35"
 pip install "httpx>=0.27" "pytest>=8.3" "pytest-asyncio>=0.24"  # dev
 ```
 
@@ -87,6 +87,11 @@ The React app in `../frontend` runs on a different origin (e.g. `http://localhos
 | `RCA_JWT_ISSUER`                   | *(empty / optional)*                | Optional expected JWT `iss`.                                                                                                                                                                                                                                                                                               |
 | `RCA_JWT_AUDIENCE`                 | *(empty / optional)*                | Optional expected JWT `aud`.                                                                                                                                                                                                                                                                                               |
 | `RCA_ADMIN_TOKEN`                  | *(empty / disabled)*                | Enables admin APIs for per-tenant limits via `X-Admin-Token`.                                                                                                                                                                                                                                                              |
+| `RCA_S3_BUCKET`                    | *(empty)*                           | When set, full trace JSON is stored in this bucket under `{urlencoded_tenant_id}/{trace_id}/trace.json` (environment is **not** in the path). The `traces` row keeps metadata, `step_count`, `blob_key`, `blob_etag`, and an empty `payload` JSON. When empty, behavior is unchanged (full JSON in SQLite/Postgres).        |
+| `RCA_S3_ENDPOINT_URL`            | *(empty)*                           | S3-compatible API base URL, e.g. `http://127.0.0.1:9000` for MinIO. Empty uses default AWS endpoints.                                                                                                                                                                                                                                                                 |
+| `RCA_S3_REGION`                    | `us-east-1`                         | Region passed to boto3.                                                                                                                                                                                                                                                                                                    |
+| `RCA_S3_ACCESS_KEY_ID`             | *(empty)*                           | Optional; if empty, boto3 uses the usual AWS environment/credential chain (`AWS_ACCESS_KEY_ID`, etc.).                                                                                                                                                                                                                      |
+| `RCA_S3_SECRET_ACCESS_KEY`         | *(empty)*                           | Optional; pairs with `RCA_S3_ACCESS_KEY_ID` when set.                                                                                                                                                                                                                                                                       |
 
 
 For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace, then `GET` it (may need a short delay while worker drains backlog).

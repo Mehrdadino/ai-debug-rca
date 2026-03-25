@@ -531,6 +531,28 @@ Single **coherent** stack for Phase 1–3 (speed to proof, one primary language 
 
 **Optional later:** **subpartition by time** (e.g. monthly `RANGE` on `started_at` or `ingested_at`) under each hash bucket for TTL-style drops—only when measured.
 
+### 16.1.2 S3-compatible blob storage — where to store access keys
+
+**Principle:** `s3_access_key_id` and `s3_secret_access_key` (or the standard `AWS_*` equivalents) are **secrets**. They must **never** be committed to the repository, checked into tickets, or baked into container images as literals.
+
+**Options (prefer top to bottom for production):**
+
+| Approach | When to use | Notes |
+|----------|-------------|--------|
+| **IAM role for the workload** (ECS task role, Lambda execution role, EC2 instance profile, EKS/IRSA, etc.) | Production on AWS | **Preferred:** no long-lived access keys in config; boto3 uses the role automatically. Rotate by IAM policy, not by redeploying secrets. |
+| **GCP / Azure workload identity** (GKE workload identity, Azure managed identity, etc.) | Production on those clouds | Same idea as IAM: **prefer** identity attached to the service over static keys; wire credentials the platform provides into the process or use provider-specific SDK integration if not using S3 API with keys. |
+| **Environment variables** set by the platform | Containers, systemd, PaaS (Fly, Railway, etc.) | Inject `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (or app-specific `RCA_S3_*` if the stack maps them) from the host’s secret store. Values exist only at runtime. |
+| **Secret manager → env at startup** | AWS Secrets Manager, SSM Parameter Store (SecureString), Vault, Doppler, etc. | Platform or sidecar resolves secrets into env vars before the process starts; app still reads env only. |
+| **Local `.env` file** (gitignored) | Developer laptop, one-off staging | Acceptable for **local** MinIO/S3 testing; ensure **`.env` is in `.gitignore`** and only **`.env.example`** (placeholders) is committed. |
+
+**Implementation alignment (reference backend):**
+
+- If **`RCA_S3_BUCKET`** is unset, the app does **not** call object storage—no keys required.
+- When blob mode is on, credentials may be supplied as **app-prefixed** (`RCA_S3_ACCESS_KEY_ID`, `RCA_S3_SECRET_ACCESS_KEY`) or omitted so **boto3’s default credential chain** applies (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `~/.aws/credentials`, then IAM role).
+- **MinIO / local S3-compatible:** set **`RCA_S3_ENDPOINT_URL`** (e.g. `http://127.0.0.1:9000`) and bucket; keys are often **dev-only** credentials—still treat as secrets and keep them out of git.
+
+**Do not:** paste keys into `plan.md`, README examples, or Terraform state without encryption; treat any example as **placeholder only**.
+
 ### 16.2 External LLM calls — why, where, and what we do *not* use them for
 
 The product’s **core diagnosis** is **deterministic**: rules over the **normalized execution graph**, scoring, and a **primary hypothesis** with **evidence** (`step_id`s, rule IDs). **That path does not require** calling OpenAI or Anthropic.
@@ -615,7 +637,7 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 ### Near-term (product + trust)
 
 1. **Web UI workflow polish** — improve failure-first investigator flows (saved filters, clearer empty/error states, and optional shareable deep links) on top of the existing graph/timeline and step-query experiences; keep public-API-only consumption.
-2. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path.
+2. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path. **Where to put access keys (and when to avoid keys):** **§16.1.2**.
 
 ### Data & scale
 

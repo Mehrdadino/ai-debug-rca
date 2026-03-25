@@ -27,7 +27,10 @@ class TraceRecord(Base):
     status: Mapped[str] = mapped_column(String(32), index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    step_count: Mapped[int] = mapped_column(Integer, insert_default=0)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    blob_key: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    blob_etag: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         insert_default=lambda: datetime.now(timezone.utc),
