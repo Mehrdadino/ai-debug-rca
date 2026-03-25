@@ -610,11 +610,11 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 - **Rate limits & quotas (initial):** per-tenant ingest request-rate and daily trace quota with **429 + Retry-After** on `POST /v1/traces` and `/v1/traces/batch` (current implementation is in-process; distributed limiter backend remains a scale task).
 - **Tenant limit management (initial):** admin-only APIs (`/v1/admin/tenants/{tenant_id}/limits`) persist per-tenant policies in `tenant_limits`; ingest enforcement resolves tenant override first, then global defaults.
 - **Migrations (initial):** Alembic is wired with a baseline revision; startup runs `upgrade head` instead of relying only on `create_all`.
-- **Web UI baseline:** React app can connect to API and exercise key flows (settings/auth mode, ingest single/batch, traces list/detail + diagnosis JSON, step queries, admin limits, test-data generation).
+- **Web UI (current):** React app supports auth mode switching, ingest single/batch, trace list with infinite scroll + filters, trace detail with execution graph + timeline + step drill-down, step query table with infinite scroll and row-to-trace deep-linking, admin limits, and test-data generation.
 
 ### Near-term (product + trust)
 
-1. **Web UI visualization depth** — add true trace **graph + timeline** rendering and stronger failure-first workflows on top of the current functional UI; keep public-API-only consumption.
+1. **Web UI workflow polish** — improve failure-first investigator flows (saved filters, clearer empty/error states, and optional shareable deep links) on top of the existing graph/timeline and step-query experiences; keep public-API-only consumption.
 2. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path.
 
 ### Data & scale

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type WheelEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type WheelEvent } from 'react'
 import './App.css'
 
 type TabKey = 'settings' | 'ingest' | 'traces' | 'steps' | 'admin' | 'testing'
@@ -57,6 +57,65 @@ type PersistedUiState = {
   tab?: TabKey
 }
 const UI_STATE_KEY = 'rca_ui_state_v1'
+
+const TAB_KEYS: TabKey[] = ['settings', 'ingest', 'traces', 'steps', 'admin', 'testing']
+
+function readUrlSearch(): URLSearchParams {
+  if (typeof window === 'undefined') return new URLSearchParams()
+  return new URLSearchParams(window.location.search)
+}
+
+function parseTabParam(sp: URLSearchParams): TabKey | null {
+  const raw = sp.get('tab')?.trim()
+  if (!raw) return null
+  return TAB_KEYS.includes(raw as TabKey) ? (raw as TabKey) : null
+}
+
+function parseTraceStatusParam(v: string | null): 'all' | TraceStatus | null {
+  if (!v) return null
+  if (v === 'all') return 'all'
+  if (v === 'success' || v === 'error' || v === 'partial') return v
+  return null
+}
+
+function parseTraceEnvParam(v: string | null): 'all' | TraceEnvironment | null {
+  if (!v) return null
+  if (v === 'all') return 'all'
+  if (v === 'prod' || v === 'staging' || v === 'dev' || v === 'critical') return v
+  return null
+}
+
+function parseDetailEnvParam(v: string | null): TraceEnvironment {
+  if (v === 'staging' || v === 'dev' || v === 'critical' || v === 'prod') return v
+  return 'prod'
+}
+
+function initialStepsFromUrl(): { stepsType: string; stepsDays: number; stepsErrorOnly: boolean | null } {
+  if (typeof window === 'undefined') return { stepsType: '', stepsDays: 7, stepsErrorOnly: true }
+  const sp = readUrlSearch()
+  if (!sp.has('step_type') && !sp.has('step_days') && !sp.has('step_has_error')) {
+    return { stepsType: '', stepsDays: 7, stepsErrorOnly: true }
+  }
+  const stepsType = sp.get('step_type') ?? ''
+  const stepsDays = Math.min(365, Math.max(1, Number(sp.get('step_days')) || 7))
+  const se = sp.get('step_has_error')
+  let stepsErrorOnly: boolean | null = true
+  if (se === 'all') stepsErrorOnly = null
+  else if (se === 'true') stepsErrorOnly = true
+  else if (se === 'false') stepsErrorOnly = false
+  return { stepsType, stepsDays, stepsErrorOnly }
+}
+
+function readTraceDeepLinkOnce(): { traceId: string; env: TraceEnvironment; step: string | null } | null {
+  const sp = readUrlSearch()
+  const traceId = sp.get('trace_id')?.trim() ?? ''
+  if (!traceId) return null
+  return {
+    traceId,
+    env: parseDetailEnvParam(sp.get('detail_env')),
+    step: sp.get('step_id')?.trim() || null,
+  }
+}
 const TRACE_PAGE_SIZE = 10
 const STEPS_PAGE_SIZE = 20
 const TRACE_SPINNER_MIN_MS = 320
@@ -219,8 +278,14 @@ function formatLatencyMs(metadata: Record<string, unknown>): string {
 }
 
 function App() {
+  const traceDeepLinkRef = useRef(readTraceDeepLinkOnce())
+
   const [tab, setTab] = useState<TabKey>(() => {
     if (typeof window === 'undefined') return 'traces'
+    const sp = readUrlSearch()
+    if (sp.get('trace_id')?.trim()) return 'traces'
+    const fromUrl = parseTabParam(sp)
+    if (fromUrl) return fromUrl
     try {
       const raw = window.localStorage.getItem(UI_STATE_KEY)
       if (!raw) return 'traces'
@@ -259,10 +324,22 @@ function App() {
   const [traceHasMore, setTraceHasMore] = useState(true)
   const [traceLoadingMore, setTraceLoadingMore] = useState(false)
   const traceListRef = useRef<HTMLUListElement | null>(null)
-  const [traceStatusFilter, setTraceStatusFilter] = useState<'all' | TraceStatus>('all')
-  const [traceEnvFilter, setTraceEnvFilter] = useState<'all' | TraceEnvironment>('all')
-  const [traceIdLookup, setTraceIdLookup] = useState('')
-  const [traceEnvironment, setTraceEnvironment] = useState<TraceEnvironment>('prod')
+  const [traceStatusFilter, setTraceStatusFilter] = useState<'all' | TraceStatus>(() => {
+    if (typeof window === 'undefined') return 'all'
+    return parseTraceStatusParam(readUrlSearch().get('trace_status')) ?? 'all'
+  })
+  const [traceEnvFilter, setTraceEnvFilter] = useState<'all' | TraceEnvironment>(() => {
+    if (typeof window === 'undefined') return 'all'
+    return parseTraceEnvParam(readUrlSearch().get('trace_env')) ?? 'all'
+  })
+  const [traceIdLookup, setTraceIdLookup] = useState(() => {
+    if (typeof window === 'undefined') return ''
+    return readUrlSearch().get('trace_id')?.trim() ?? ''
+  })
+  const [traceEnvironment, setTraceEnvironment] = useState<TraceEnvironment>(() => {
+    if (typeof window === 'undefined') return 'prod'
+    return parseDetailEnvParam(readUrlSearch().get('detail_env'))
+  })
   const [traceDetail, setTraceDetail] = useState<Record<string, unknown> | null>(null)
   const [diagnosis, setDiagnosis] = useState<Record<string, unknown> | null>(null)
   const [graphFocusMode, setGraphFocusMode] = useState(false)
@@ -302,9 +379,10 @@ function App() {
   const [stepsEverQueried, setStepsEverQueried] = useState(false)
   const [stepsListLoading, setStepsListLoading] = useState(false)
   const stepsListRef = useRef<HTMLDivElement | null>(null)
-  const [stepsType, setStepsType] = useState('')
-  const [stepsDays, setStepsDays] = useState(7)
-  const [stepsErrorOnly, setStepsErrorOnly] = useState<boolean | null>(true)
+  const initialSteps = initialStepsFromUrl()
+  const [stepsType, setStepsType] = useState(initialSteps.stepsType)
+  const [stepsDays, setStepsDays] = useState(initialSteps.stepsDays)
+  const [stepsErrorOnly, setStepsErrorOnly] = useState<boolean | null>(initialSteps.stepsErrorOnly)
 
   const [adminTenant, setAdminTenant] = useState('org_demo')
   const [limits, setLimits] = useState<TenantLimits | null>(null)
@@ -850,6 +928,89 @@ function App() {
     }
   }
 
+  const fetchTraceDetailForRef = useRef(fetchTraceDetailFor)
+  fetchTraceDetailForRef.current = fetchTraceDetailFor
+
+  const hydrateFromSearchParams = useCallback((sp: URLSearchParams) => {
+    if (sp.get('trace_id')?.trim()) {
+      setTab('traces')
+    } else {
+      const t = parseTabParam(sp)
+      if (t) setTab(t)
+    }
+    const ts = parseTraceStatusParam(sp.get('trace_status'))
+    const te = parseTraceEnvParam(sp.get('trace_env'))
+    if (ts) setTraceStatusFilter(ts)
+    if (te) setTraceEnvFilter(te)
+    if (sp.has('trace_id')) {
+      const tid = sp.get('trace_id')?.trim() ?? ''
+      setTraceIdLookup(tid)
+      if (tid) setTraceEnvironment(parseDetailEnvParam(sp.get('detail_env')))
+    } else if (parseTabParam(sp) === 'traces') {
+      setTraceIdLookup('')
+    }
+    if (sp.has('step_id')) {
+      setSelectedStepId(sp.get('step_id')?.trim() ?? '')
+    } else if (sp.get('trace_id')?.trim()) {
+      setSelectedStepId('')
+    }
+    if (sp.has('step_type')) setStepsType(sp.get('step_type') ?? '')
+    if (sp.has('step_days')) {
+      const n = Number(sp.get('step_days'))
+      if (Number.isFinite(n)) setStepsDays(Math.min(365, Math.max(1, n)))
+    }
+    if (sp.has('step_has_error')) {
+      const se = sp.get('step_has_error')
+      if (se === 'all') setStepsErrorOnly(null)
+      else if (se === 'true') setStepsErrorOnly(true)
+      else if (se === 'false') setStepsErrorOnly(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const sp = new URLSearchParams()
+    sp.set('tab', tab)
+    if (tab === 'traces') {
+      sp.set('trace_status', traceStatusFilter)
+      sp.set('trace_env', traceEnvFilter)
+      const tid = traceIdLookup.trim()
+      if (tid) {
+        sp.set('trace_id', tid)
+        sp.set('detail_env', traceEnvironment)
+        if (selectedStepId.trim()) sp.set('step_id', selectedStepId.trim())
+      }
+    }
+    if (tab === 'steps') {
+      sp.set('step_type', stepsType)
+      sp.set('step_days', String(stepsDays))
+      sp.set('step_has_error', stepsErrorOnly === null ? 'all' : String(stepsErrorOnly))
+    }
+    const next = `${window.location.pathname}?${sp.toString()}`
+    const cur = `${window.location.pathname}${window.location.search}`
+    if (next !== cur) {
+      window.history.replaceState({}, '', next)
+    }
+  }, [tab, traceStatusFilter, traceEnvFilter, traceIdLookup, traceEnvironment, selectedStepId, stepsType, stepsDays, stepsErrorOnly])
+
+  useEffect(() => {
+    const onPop = () => {
+      hydrateFromSearchParams(new URLSearchParams(window.location.search))
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [hydrateFromSearchParams])
+
+  useEffect(() => {
+    const link = traceDeepLinkRef.current
+    traceDeepLinkRef.current = null
+    if (!link || tab !== 'traces') return
+    void fetchTraceDetailForRef.current(link.traceId, link.env, {
+      focusStepId: link.step,
+      notifyOnSuccess: false,
+    })
+  }, [tab])
+
   async function fetchTraceDetail(): Promise<void> {
     if (!traceIdLookup.trim()) return setError('Trace ID is required')
     await fetchTraceDetailFor(traceIdLookup.trim(), traceEnvironment, { notifyOnSuccess: true })
@@ -1023,6 +1184,15 @@ function App() {
     }
   }
 
+  async function copyShareLink(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(window.location.href)
+      notify('Link copied to clipboard')
+    } catch {
+      notify('Could not copy link — check clipboard permissions')
+    }
+  }
+
   useEffect(() => {
     if (tab !== 'traces') return
     void refreshTraces(true)
@@ -1188,7 +1358,15 @@ function App() {
           </article>
           )}
           <article className="glass card">
-            <h3>Trace Detail Query</h3>
+            <div className="trace-detail-header">
+              <h3>Trace Detail Query</h3>
+              <button type="button" className="secondary" onClick={() => void copyShareLink()}>
+                Copy link
+              </button>
+            </div>
+            <p className="muted trace-detail-hint">
+              The query string updates as you change tab, filters, trace, and step — use Copy link to share this view.
+            </p>
             <div className="grid">
               <label>Trace ID<input value={traceIdLookup} onChange={(e) => setTraceIdLookup(e.target.value)} /></label>
               <label>Environment

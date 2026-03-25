@@ -291,7 +291,7 @@ button.busy::after {
   margin: 10px 0 0;
   padding-left: 0;
   list-style: none;
-  max-height: 380px;
+  max-height: 560px;
   overflow: auto;
 }
 
@@ -621,6 +621,25 @@ pre {
 .steps-end-note {
   margin: 0;
   padding: 8px 10px 12px;
+}
+
+.trace-detail-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.trace-detail-header h3 {
+  margin: 0;
+}
+
+.trace-detail-hint {
+  margin: 0 0 12px;
+  font-size: 0.88rem;
+  max-width: 62ch;
+  line-height: 1.45;
 }
 
 @media (max-width: 980px) {
