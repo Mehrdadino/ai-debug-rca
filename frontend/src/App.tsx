@@ -272,6 +272,14 @@ function extractDiagnosisView(diagnosis: Record<string, unknown> | null): Diagno
   }
 }
 
+function formatHypothesisId(v: string): string {
+  return v
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
 function computeNodeDepths(steps: TraceStep[], edges: TraceEdge[]): Map<string, number> {
   const parents = new Map<string, string[]>()
   const stepIds = steps.map((s) => s.step_id)
@@ -1228,15 +1236,6 @@ function App() {
     }
   }
 
-  async function copyShareLink(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(window.location.href)
-      notify('Link copied to clipboard')
-    } catch {
-      notify('Could not copy link — check clipboard permissions')
-    }
-  }
-
   useEffect(() => {
     if (tab !== 'traces') return
     void refreshTraces(true)
@@ -1404,12 +1403,9 @@ function App() {
           <article className="glass card">
             <div className="trace-detail-header">
               <h3>Trace Detail Query</h3>
-              <button type="button" className="secondary" onClick={() => void copyShareLink()}>
-                Copy link
-              </button>
             </div>
             <p className="muted trace-detail-hint">
-              The query string updates as you change tab, filters, trace, and step — use Copy link to share this view.
+              The query string updates as you change tab, filters, trace, and step — copy the browser URL to share this view.
             </p>
             <div className="grid">
               <label>Trace ID<input value={traceIdLookup} onChange={(e) => setTraceIdLookup(e.target.value)} /></label>
@@ -1467,7 +1463,7 @@ function App() {
                     <svg
                       className="trace-graph"
                       width={graphCanvas.width}
-                      height={graphCanvas.height}
+                      height={Math.max(graphCanvas.height, 360)}
                       viewBox={`0 0 ${graphCanvas.width} ${graphCanvas.height}`}
                       role="img"
                       aria-label="Trace execution graph"
@@ -1599,34 +1595,38 @@ function App() {
               </div>
               )}
             </div>
-            <h3>Trace JSON</h3>
-            <pre>{traceDetail ? JSON.stringify(traceDetail, null, 2) : 'No trace loaded yet.'}</pre>
-            <h3>Diagnosis</h3>
+            <h3 className="detail-section-heading">Diagnosis</h3>
             {diagnosisView ? (
               <div className="diagnosis-overview">
-                <div className="diagnosis-kpis">
+                <div className="diagnosis-title-row">
                   <div>
-                    <span className="muted">Primary</span>
-                    <strong className="mono">{diagnosisView.primary_hypothesis}</strong>
+                    <h4>{formatHypothesisId(diagnosisView.primary_hypothesis)}</h4>
+                    <p className="muted diagnosis-rule-id mono">{diagnosisView.primary_hypothesis}</p>
                   </div>
-                  <div>
-                    <span className="muted">Confidence</span>
-                    <strong>{diagnosisView.confidence === null ? 'n/a' : diagnosisView.confidence.toFixed(3)}</strong>
+                  <div className="diagnosis-confidence-pill">
+                    Confidence {diagnosisView.confidence === null ? 'n/a' : diagnosisView.confidence.toFixed(3)}
                   </div>
                 </div>
                 <p className="diagnosis-summary-text">{diagnosisView.summary || 'No deterministic summary available yet.'}</p>
                 {diagnosisView.secondary_hypotheses.length > 0 && (
-                  <p className="muted diagnosis-secondary">
-                    Secondary hypotheses: <span className="mono">{diagnosisView.secondary_hypotheses.join(', ')}</span>
-                  </p>
+                  <div className="diagnosis-secondary">
+                    <p className="muted">Secondary hypotheses</p>
+                    <div className="diagnosis-tags">
+                      {diagnosisView.secondary_hypotheses.map((h) => (
+                        <span key={h} className="diagnosis-tag mono">{h}</span>
+                      ))}
+                    </div>
+                  </div>
                 )}
                 {diagnosisView.evidence.length > 0 ? (
                   <ol className="diagnosis-evidence-list">
                     {diagnosisView.evidence.slice(0, 6).map((ev, idx) => (
-                      <li key={`${ev.rule_id}-${ev.step_id ?? 'trace'}-${idx}`}>
-                        <span className="mono">{ev.rule_id}</span>
-                        {ev.step_id ? <span className="muted"> (step: {ev.step_id})</span> : null}
-                        <div>{ev.message}</div>
+                      <li key={`${ev.rule_id}-${ev.step_id ?? 'trace'}-${idx}`} className="diagnosis-evidence-item">
+                        <div className="diagnosis-evidence-head">
+                          <span className="mono">{ev.rule_id}</span>
+                          {ev.step_id ? <span className="muted">step: {ev.step_id}</span> : <span className="muted">trace-level</span>}
+                        </div>
+                        <div className="diagnosis-evidence-message">{ev.message}</div>
                       </li>
                     ))}
                   </ol>
@@ -1637,7 +1637,9 @@ function App() {
             ) : (
               <p className="muted">No diagnosis loaded yet.</p>
             )}
-            <h3>Diagnosis JSON</h3>
+            <h3 className="detail-section-heading">Trace JSON</h3>
+            <pre>{traceDetail ? JSON.stringify(traceDetail, null, 2) : 'No trace loaded yet.'}</pre>
+            <h3 className="detail-section-heading">Diagnosis JSON</h3>
             <pre>{diagnosis ? JSON.stringify(diagnosis, null, 2) : 'No diagnosis loaded yet.'}</pre>
           </article>
         </section>
