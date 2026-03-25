@@ -632,16 +632,17 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 - **Rate limits & quotas (initial):** per-tenant ingest request-rate and daily trace quota with **429 + Retry-After** on `POST /v1/traces` and `/v1/traces/batch` (current implementation is in-process; distributed limiter backend remains a scale task).
 - **Tenant limit management (initial):** admin-only APIs (`/v1/admin/tenants/{tenant_id}/limits`) persist per-tenant policies in `tenant_limits`; ingest enforcement resolves tenant override first, then global defaults.
 - **Migrations (initial):** Alembic is wired with a baseline revision; startup runs `upgrade head` instead of relying only on `create_all`.
+- **Object storage (implemented, optional):** when `RCA_S3_BUCKET` is set, full trace payload is written to S3-compatible storage at `{urlencoded_tenant_id}/{trace_id}/trace.json`; DB stores metadata/index fields (`blob_key`, `blob_etag`, `step_count`) and keeps read compatibility.
 - **Web UI (current):** React app supports auth mode switching, ingest single/batch, trace list with infinite scroll + filters, trace detail with execution graph + timeline + step drill-down, step query table with infinite scroll and row-to-trace deep-linking, admin limits, and test-data generation.
 
 ### Near-term (product + trust)
 
 1. **Web UI workflow polish** — improve failure-first investigator flows (saved filters, clearer empty/error states, and optional shareable deep links) on top of the existing graph/timeline and step-query experiences; keep public-API-only consumption.
-2. **Object storage (S3-compatible)** — full payload blobs; DB holds index + metadata; optional small-row hot path. **Where to put access keys (and when to avoid keys):** **§16.1.2**.
+2. **S3 hardening + ops guardrails** — lifecycle/retention rules, failure/retry observability, and reconciliation tooling for DB↔blob consistency. **Where to put access keys (and when to avoid keys):** **§16.1.2**.
 
 ### Data & scale
 
-3. **Distributed ingest queue + workers** — move background ingest from DB-backed polling to a distributed queue/consumer model (SQS / Redis Streams / Pub/Sub) for multi-instance safety, retry/DLQ semantics, and cross-region scale; keep DB backlog as local/dev fallback only.
+3. **Distributed ingest queue + workers** — move background ingest from DB-backed polling to a distributed queue/consumer model (SQS / Redis Streams / Pub/Sub) for multi-instance safety, retry/DLQ semantics, and cross-region scale.
 4. **Distributed rate limits / quotas (Redis)** — use Redis as the shared backend for rate limits and daily quotas so 429 behavior stays correct across multiple API instances.
 5. **PostgreSQL scale hardening** — tenant hash partitioning and operational tuning once measured load justifies it; local/tests already run against Postgres (Docker/`rca_test`), so behavior stays aligned with prod.
 
@@ -650,17 +651,30 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 6. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
 7. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
 8. **Ingest owner metadata** — add **`ingest_owner_type`** (`user` \| `service`) and optional **`ingest_owner_ref`** to the HTTP + stored trace model per **§7.7** (DB columns + list/filter in UI when ready).
+9. **Step/trace outcome semantics (defer until user signal)** — decide whether to introduce a non-binary failure model (for example **`soft_fail`** vs **`hard_fail`** at step level) and derived trace-level outcome (for example **`degraded`** when there are soft failures but no hard failures). Keep current behavior for now; revisit after real user evidence that this distinction improves triage, alert quality, or reporting.
+
+#### 9.1 Decision gate (when to implement)
+
+- Confirm at least a few design-partner users explicitly need to distinguish **recoverable/expected** failures from **action-required** failures.
+- Validate the distinction changes behavior (dashboard filters, alert routing, or incident response), not just label preference.
+- Lock vocabulary before schema work (`soft_fail` / `hard_fail` / `degraded` vs alternatives like `warning` / `partial_success`) so SDK/UI/docs stay consistent.
+
+#### 9.2 Proposed implementation shape (future)
+
+- **Phase A (low-risk):** accept optional step-level failure severity in ingest payload; keep trace status aggregation unchanged until semantics stabilize.
+- **Phase B (schema + UX):** add indexed storage/filtering for the chosen outcome model and expose it in list/query/UI.
+- **Aggregation rule (candidate):** any hard failure => trace `error`; no hard failures and >=1 soft failure => trace `degraded`; no failures => trace `success`.
 
 ### Ops & enterprise
 
-9. **Observability** — OpenTelemetry on our own API/workers.
-10. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
-11. **Webhooks / export** — after hypothesis quality is credible.
+10. **Observability** — OpenTelemetry on our own API/workers.
+11. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
+12. **Webhooks / export** — after hypothesis quality is credible.
 
 ### GTM
 
-12. **Design partner brief** + **90-day TTPC** measurement loop.
-13. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
+13. **Design partner brief** + **90-day TTPC** measurement loop.
+14. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
 
 ---
 
