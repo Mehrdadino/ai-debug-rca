@@ -14,6 +14,16 @@ LOOP_IMPL="${LOOP_IMPL:-asyncio}"
 DEFAULT_PG_URL="postgresql+asyncpg://rca:rca@127.0.0.1:5433/rca"
 export RCA_DATABASE_URL="${RCA_DATABASE_URL:-$DEFAULT_PG_URL}"
 
+# Common local misconfig guard: stale :5432 URL points to system Postgres
+# (often missing the expected rca role/db). Default local stack is :5433.
+if [[ "${RCA_DATABASE_URL}" == *127.0.0.1:5432* ]] || [[ "${RCA_DATABASE_URL}" == *localhost:5432* ]]; then
+  if [[ "${RCA_ALLOW_LOCAL_5432:-0}" != "1" ]]; then
+    echo "Detected local RCA_DATABASE_URL on port 5432; switching to local Docker Postgres on 5433."
+    echo "Set RCA_ALLOW_LOCAL_5432=1 to keep using port 5432 explicitly."
+    export RCA_DATABASE_URL="${DEFAULT_PG_URL}"
+  fi
+fi
+
 echo "Starting API on ${HOST}:${PORT}"
 
 EXISTING_PIDS="$(lsof -tiTCP:${PORT} -sTCP:LISTEN 2>/dev/null || true)"

@@ -24,6 +24,10 @@ class Diagnosis(BaseModel):
         description="Rule id for the ranked primary explanation (e.g. step_error)",
     )
     confidence: float = Field(..., ge=0.0, le=1.0)
+    summary: str = Field(
+        ...,
+        description="Deterministic short explanation derived from primary hypothesis and evidence.",
+    )
     evidence: List[EvidenceItem] = Field(default_factory=list)
     secondary_hypotheses: List[str] = Field(
         default_factory=list,

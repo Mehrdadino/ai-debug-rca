@@ -521,6 +521,41 @@ pre {
   margin-top: 10px;
 }
 
+.diagnosis-overview {
+  margin-top: 8px;
+  border: 1px solid rgba(124, 147, 255, 0.2);
+  border-radius: 10px;
+  background: rgba(12, 17, 30, 0.7);
+  padding: 12px;
+}
+
+.diagnosis-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.diagnosis-kpis > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.diagnosis-summary-text {
+  margin: 10px 0;
+}
+
+.diagnosis-secondary {
+  margin-bottom: 8px;
+}
+
+.diagnosis-evidence-list {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 8px;
+}
+
 .graph-toolbar {
   display: flex;
   justify-content: space-between;

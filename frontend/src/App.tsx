@@ -25,6 +25,20 @@ type StepSummary = {
   error?: string | null
 }
 
+type DiagnosisEvidence = {
+  rule_id: string
+  step_id?: string | null
+  message: string
+}
+
+type DiagnosisView = {
+  primary_hypothesis: string
+  confidence: number | null
+  summary: string
+  secondary_hypotheses: string[]
+  evidence: DiagnosisEvidence[]
+}
+
 type TenantLimits = {
   tenant_id: string
   ingest_rate_limit_rps: number
@@ -229,6 +243,35 @@ function extractTraceEdges(traceDetail: Record<string, unknown> | null, steps: T
   return edges
 }
 
+function extractDiagnosisView(diagnosis: Record<string, unknown> | null): DiagnosisView | null {
+  if (!diagnosis) return null
+  const primary_hypothesis = String(diagnosis.primary_hypothesis ?? '').trim()
+  if (!primary_hypothesis) return null
+  const confidenceRaw = diagnosis.confidence
+  const confidence = typeof confidenceRaw === 'number' && Number.isFinite(confidenceRaw) ? confidenceRaw : null
+  const summary = String(diagnosis.summary ?? '').trim()
+  const secondaryRaw = Array.isArray(diagnosis.secondary_hypotheses) ? diagnosis.secondary_hypotheses : []
+  const secondary_hypotheses = secondaryRaw.map((v) => String(v)).filter((v) => v.length > 0)
+  const evidenceRaw = Array.isArray(diagnosis.evidence) ? diagnosis.evidence : []
+  const evidence: DiagnosisEvidence[] = evidenceRaw
+    .map((item) => asRecord(item))
+    .filter((item): item is Record<string, unknown> => item !== null)
+    .map((item) => ({
+      rule_id: String(item.rule_id ?? ''),
+      step_id: item.step_id ? String(item.step_id) : null,
+      message: String(item.message ?? ''),
+    }))
+    .filter((item) => item.rule_id.length > 0 && item.message.length > 0)
+
+  return {
+    primary_hypothesis,
+    confidence,
+    summary,
+    secondary_hypotheses,
+    evidence,
+  }
+}
+
 function computeNodeDepths(steps: TraceStep[], edges: TraceEdge[]): Map<string, number> {
   const parents = new Map<string, string[]>()
   const stepIds = steps.map((s) => s.step_id)
@@ -414,6 +457,7 @@ function App() {
   }, [apiKey, jwtToken])
 
   const traceSteps = useMemo(() => extractTraceSteps(traceDetail), [traceDetail])
+  const diagnosisView = useMemo(() => extractDiagnosisView(diagnosis), [diagnosis])
   const traceEdges = useMemo(() => extractTraceEdges(traceDetail, traceSteps), [traceDetail, traceSteps])
   const visualNodes = useMemo(() => buildVisualNodes(traceSteps, traceEdges), [traceSteps, traceEdges])
   const graphCanvas = useMemo(() => {
@@ -1557,6 +1601,42 @@ function App() {
             </div>
             <h3>Trace JSON</h3>
             <pre>{traceDetail ? JSON.stringify(traceDetail, null, 2) : 'No trace loaded yet.'}</pre>
+            <h3>Diagnosis</h3>
+            {diagnosisView ? (
+              <div className="diagnosis-overview">
+                <div className="diagnosis-kpis">
+                  <div>
+                    <span className="muted">Primary</span>
+                    <strong className="mono">{diagnosisView.primary_hypothesis}</strong>
+                  </div>
+                  <div>
+                    <span className="muted">Confidence</span>
+                    <strong>{diagnosisView.confidence === null ? 'n/a' : diagnosisView.confidence.toFixed(3)}</strong>
+                  </div>
+                </div>
+                <p className="diagnosis-summary-text">{diagnosisView.summary || 'No deterministic summary available yet.'}</p>
+                {diagnosisView.secondary_hypotheses.length > 0 && (
+                  <p className="muted diagnosis-secondary">
+                    Secondary hypotheses: <span className="mono">{diagnosisView.secondary_hypotheses.join(', ')}</span>
+                  </p>
+                )}
+                {diagnosisView.evidence.length > 0 ? (
+                  <ol className="diagnosis-evidence-list">
+                    {diagnosisView.evidence.slice(0, 6).map((ev, idx) => (
+                      <li key={`${ev.rule_id}-${ev.step_id ?? 'trace'}-${idx}`}>
+                        <span className="mono">{ev.rule_id}</span>
+                        {ev.step_id ? <span className="muted"> (step: {ev.step_id})</span> : null}
+                        <div>{ev.message}</div>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="muted">No evidence items for this diagnosis.</p>
+                )}
+              </div>
+            ) : (
+              <p className="muted">No diagnosis loaded yet.</p>
+            )}
             <h3>Diagnosis JSON</h3>
             <pre>{diagnosis ? JSON.stringify(diagnosis, null, 2) : 'No diagnosis loaded yet.'}</pre>
           </article>
