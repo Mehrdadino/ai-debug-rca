@@ -626,7 +626,7 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 
 ### Already in repo (baseline)
 
-- Python FastAPI backend: `POST /v1/traces`, `POST /v1/traces/batch`, `GET` list (optional **`environment`** + **`started_at_from` / `started_at_to`** on run time) / detail / diagnosis, SQLite + `ingest_jobs` durable backlog, rule-based `DiagnosisRecord`, example `scripts/`.
+- Python FastAPI backend: `POST /v1/traces`, `POST /v1/traces/batch`, `GET` list (optional **`environment`** + **`started_at_from` / `started_at_to`** on run time) / detail / diagnosis, **PostgreSQL** + `ingest_jobs` durable backlog, rule-based `DiagnosisRecord`, example `scripts/`. Local dev: **`backend/docker-compose.postgres.yml`** (port **5433**) and **`backend/run_api.sh`** (starts Docker, migrates, runs the API); tests use DB **`rca_test`** (see **`backend/README.md`**).
 - **Tenant auth (production path):** optional **`RCA_API_KEYS`** JSON map → `tenant_id`, plus **JWT bearer auth** (`RCA_JWT_*`: secret, algorithm, tenant claim, optional issuer/audience); clients use **`Authorization: Bearer`** or **`X-API-Key`**; with keys/JWT unset, dev uses **`X-Tenant-ID`** only.
 - **Composite uniqueness:** **`UNIQUE (tenant_id, trace_id)`** on **`traces`**, **`diagnoses`**, **`ingest_jobs`** (and **`UNIQUE (tenant_id, trace_id, step_id)`** on **`trace_steps`**). The same `trace_id` UUID may exist for **different** tenants; duplicates **within** the same tenant (regardless of `environment` field) return **409**. `environment` remains a column for filtering and display.
 - **Rate limits & quotas (initial):** per-tenant ingest request-rate and daily trace quota with **429 + Retry-After** on `POST /v1/traces` and `/v1/traces/batch` (current implementation is in-process; distributed limiter backend remains a scale task).
@@ -643,7 +643,7 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 
 3. **Distributed ingest queue + workers** — move background ingest from DB-backed polling to a distributed queue/consumer model (SQS / Redis Streams / Pub/Sub) for multi-instance safety, retry/DLQ semantics, and cross-region scale; keep DB backlog as local/dev fallback only.
 4. **Distributed rate limits / quotas (Redis)** — use Redis as the shared backend for rate limits and daily quotas so 429 behavior stays correct across multiple API instances.
-5. **PostgreSQL scale hardening** — tenant hash partitioning and operational tuning once measured load justifies it; keep SQLite for fast local tests.
+5. **PostgreSQL scale hardening** — tenant hash partitioning and operational tuning once measured load justifies it; local/tests already run against Postgres (Docker/`rca_test`), so behavior stays aligned with prod.
 
 ### Product surface
 

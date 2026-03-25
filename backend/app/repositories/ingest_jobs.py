@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,82 +57,43 @@ async def claim_next_ingest_job(
 ) -> Optional[IngestJobRecord]:
     now = datetime.now(timezone.utc)
     stale_before = now - timedelta(seconds=claim_timeout_seconds)
-    dialect = session.bind.dialect.name if session.bind is not None else ""
-
-    if dialect == "postgresql":
-        claim_sql = text(
-            """
-            WITH candidate AS (
-                SELECT id
-                FROM ingest_jobs
-                WHERE
-                    (
-                        status = 'queued'
-                        OR (status = 'processing' AND claimed_at < :stale_before)
-                    )
-                    AND available_at <= :now
-                ORDER BY created_at ASC
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-            )
-            UPDATE ingest_jobs j
-            SET
-                status = 'processing',
-                claimed_at = :now,
-                claimed_by = :worker_id,
-                attempts = j.attempts + 1,
-                last_error = NULL
-            FROM candidate
-            WHERE j.id = candidate.id
-            RETURNING j.id
-            """
+    claim_sql = text(
+        """
+        WITH candidate AS (
+            SELECT id
+            FROM ingest_jobs
+            WHERE
+                (
+                    status = 'queued'
+                    OR (status = 'processing' AND claimed_at < :stale_before)
+                )
+                AND available_at <= :now
+            ORDER BY created_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
         )
-        result = await session.execute(
-            claim_sql,
-            {"now": now, "stale_before": stale_before, "worker_id": worker_id},
-        )
-        claimed_id = result.scalar_one_or_none()
-        if claimed_id is None:
-            await session.rollback()
-            return None
-        await session.commit()
-        return await session.get(IngestJobRecord, claimed_id)
-
-    # SQLite/dev fallback: optimistic claim with status guard.
-    q = (
-        select(IngestJobRecord.id)
-        .where(
-            IngestJobRecord.status == "queued",
-            IngestJobRecord.available_at <= now,
-        )
-        .order_by(IngestJobRecord.created_at.asc())
-        .limit(1)
+        UPDATE ingest_jobs j
+        SET
+            status = 'processing',
+            claimed_at = :now,
+            claimed_by = :worker_id,
+            attempts = j.attempts + 1,
+            last_error = NULL
+        FROM candidate
+        WHERE j.id = candidate.id
+        RETURNING j.id
+        """
     )
-    result = await session.execute(q)
-    candidate_id = result.scalar_one_or_none()
-    if candidate_id is None:
-        await session.rollback()
-        return None
-    upd = (
-        update(IngestJobRecord)
-        .where(
-            IngestJobRecord.id == candidate_id,
-            IngestJobRecord.status == "queued",
-        )
-        .values(
-            status="processing",
-            claimed_at=now,
-            claimed_by=worker_id,
-            attempts=IngestJobRecord.attempts + 1,
-            last_error=None,
-        )
+    result = await session.execute(
+        claim_sql,
+        {"now": now, "stale_before": stale_before, "worker_id": worker_id},
     )
-    claimed = await session.execute(upd)
-    if claimed.rowcount == 0:
+    claimed_id = result.scalar_one_or_none()
+    if claimed_id is None:
         await session.rollback()
         return None
     await session.commit()
-    return await session.get(IngestJobRecord, candidate_id)
+    return await session.get(IngestJobRecord, claimed_id)
 
 
 async def ack_ingest_job(session: AsyncSession, job_id: int) -> None:

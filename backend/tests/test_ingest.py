@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import asyncio
+import os
+import re
 import uuid
 from datetime import datetime, timezone
 
+import psycopg
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
 
 
 def test_health(client: TestClient) -> None:
@@ -197,17 +198,14 @@ def test_ingest_persists_trace_steps_index(client: TestClient) -> None:
     r = client.post("/v1/traces", json=body, headers=h)
     assert r.status_code == 201
 
-    async def count_steps() -> int:
-        from app.db.engine import get_session
-        from app.db.models import TraceStepRecord
-
-        async with get_session() as session:
-            q = select(func.count()).select_from(TraceStepRecord).where(
-                TraceStepRecord.trace_id == str(tid),
-                TraceStepRecord.tenant_id == "org_demo",
-                TraceStepRecord.environment == "prod",
-            )
-            result = await session.execute(q)
-            return int(result.scalar_one())
-
-    assert asyncio.run(count_steps()) == 2
+    url = os.environ["RCA_DATABASE_URL"]
+    m = re.match(r"postgresql\+asyncpg://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)", url)
+    assert m
+    user, password, host, port, dbname = m.groups()
+    sync_url = f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
+    with psycopg.connect(sync_url) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM trace_steps WHERE trace_id = %s AND tenant_id = %s AND environment = %s",
+            (str(tid), "org_demo", "prod"),
+        ).fetchone()
+    assert row is not None and int(row[0]) == 2

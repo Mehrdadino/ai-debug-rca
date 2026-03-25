@@ -45,8 +45,6 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 
 
 async def init_db() -> None:
-    if settings.database_path:
-        settings.database_path.parent.mkdir(parents=True, exist_ok=True)
     run_migrations_to_head()
 
 

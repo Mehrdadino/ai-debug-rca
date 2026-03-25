@@ -7,8 +7,8 @@ Create Date: 2026-03-24 00:00:00
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "20260324_0004"
 down_revision = "20260323_0003"
@@ -16,13 +16,9 @@ branch_labels = None
 depends_on = None
 
 
-def _dedupe_sqlite(connection) -> None:
-    """Remove duplicate rows keeping largest id per natural key (SQLite)."""
-    for table, group_cols in [
-        ("traces", "tenant_id, trace_id"),
-        ("diagnoses", "tenant_id, trace_id"),
-        ("ingest_jobs", "tenant_id, trace_id"),
-    ]:
+def _dedupe_natural_keys(connection) -> None:
+    """Remove duplicate rows keeping largest id per natural key."""
+    for table in ("traces", "diagnoses", "ingest_jobs"):
         connection.execute(
             sa.text(
                 f"""
@@ -54,99 +50,47 @@ def _dedupe_sqlite(connection) -> None:
     )
 
 
-def _dedupe_postgresql(connection) -> None:
-    _dedupe_sqlite(connection)
-
-
 def upgrade() -> None:
     bind = op.get_bind()
-    dialect = bind.dialect.name
-    if dialect == "postgresql":
-        _dedupe_postgresql(bind)
-    else:
-        _dedupe_sqlite(bind)
-
-    if dialect == "sqlite":
-        with op.batch_alter_table("traces") as batch:
-            batch.drop_constraint("uq_traces_tenant_env_trace", type_="unique")
-            batch.create_unique_constraint("uq_traces_tenant_trace", ["tenant_id", "trace_id"])
-        with op.batch_alter_table("diagnoses") as batch:
-            batch.drop_constraint("uq_diagnoses_tenant_env_trace", type_="unique")
-            batch.create_unique_constraint("uq_diagnoses_tenant_trace", ["tenant_id", "trace_id"])
-        with op.batch_alter_table("trace_steps") as batch:
-            batch.drop_constraint("uq_trace_steps_tenant_env_trace_step", type_="unique")
-            batch.create_unique_constraint(
-                "uq_trace_steps_tenant_trace_step",
-                ["tenant_id", "trace_id", "step_id"],
-            )
-        with op.batch_alter_table("ingest_jobs") as batch:
-            batch.drop_constraint("uq_ingest_jobs_tenant_env_trace", type_="unique")
-            batch.create_unique_constraint("uq_ingest_jobs_tenant_trace", ["tenant_id", "trace_id"])
-    else:
-        op.drop_constraint("uq_traces_tenant_env_trace", "traces", type_="unique")
-        op.create_unique_constraint("uq_traces_tenant_trace", "traces", ["tenant_id", "trace_id"])
-        op.drop_constraint("uq_diagnoses_tenant_env_trace", "diagnoses", type_="unique")
-        op.create_unique_constraint(
-            "uq_diagnoses_tenant_trace", "diagnoses", ["tenant_id", "trace_id"]
-        )
-        op.drop_constraint("uq_trace_steps_tenant_env_trace_step", "trace_steps", type_="unique")
-        op.create_unique_constraint(
-            "uq_trace_steps_tenant_trace_step",
-            "trace_steps",
-            ["tenant_id", "trace_id", "step_id"],
-        )
-        op.drop_constraint("uq_ingest_jobs_tenant_env_trace", "ingest_jobs", type_="unique")
-        op.create_unique_constraint(
-            "uq_ingest_jobs_tenant_trace", "ingest_jobs", ["tenant_id", "trace_id"]
-        )
+    _dedupe_natural_keys(bind)
+    op.drop_constraint("uq_traces_tenant_env_trace", "traces", type_="unique")
+    op.create_unique_constraint("uq_traces_tenant_trace", "traces", ["tenant_id", "trace_id"])
+    op.drop_constraint("uq_diagnoses_tenant_env_trace", "diagnoses", type_="unique")
+    op.create_unique_constraint(
+        "uq_diagnoses_tenant_trace", "diagnoses", ["tenant_id", "trace_id"]
+    )
+    op.drop_constraint("uq_trace_steps_tenant_env_trace_step", "trace_steps", type_="unique")
+    op.create_unique_constraint(
+        "uq_trace_steps_tenant_trace_step",
+        "trace_steps",
+        ["tenant_id", "trace_id", "step_id"],
+    )
+    op.drop_constraint("uq_ingest_jobs_tenant_env_trace", "ingest_jobs", type_="unique")
+    op.create_unique_constraint(
+        "uq_ingest_jobs_tenant_trace", "ingest_jobs", ["tenant_id", "trace_id"]
+    )
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    dialect = bind.dialect.name
-
-    if dialect == "sqlite":
-        with op.batch_alter_table("traces") as batch:
-            batch.drop_constraint("uq_traces_tenant_trace", type_="unique")
-            batch.create_unique_constraint(
-                "uq_traces_tenant_env_trace", ["tenant_id", "environment", "trace_id"]
-            )
-        with op.batch_alter_table("diagnoses") as batch:
-            batch.drop_constraint("uq_diagnoses_tenant_trace", type_="unique")
-            batch.create_unique_constraint(
-                "uq_diagnoses_tenant_env_trace", ["tenant_id", "environment", "trace_id"]
-            )
-        with op.batch_alter_table("trace_steps") as batch:
-            batch.drop_constraint("uq_trace_steps_tenant_trace_step", type_="unique")
-            batch.create_unique_constraint(
-                "uq_trace_steps_tenant_env_trace_step",
-                ["tenant_id", "environment", "trace_id", "step_id"],
-            )
-        with op.batch_alter_table("ingest_jobs") as batch:
-            batch.drop_constraint("uq_ingest_jobs_tenant_trace", type_="unique")
-            batch.create_unique_constraint(
-                "uq_ingest_jobs_tenant_env_trace", ["tenant_id", "environment", "trace_id"]
-            )
-    else:
-        op.drop_constraint("uq_traces_tenant_trace", "traces", type_="unique")
-        op.create_unique_constraint(
-            "uq_traces_tenant_env_trace", "traces", ["tenant_id", "environment", "trace_id"]
-        )
-        op.drop_constraint("uq_diagnoses_tenant_trace", "diagnoses", type_="unique")
-        op.create_unique_constraint(
-            "uq_diagnoses_tenant_env_trace",
-            "diagnoses",
-            ["tenant_id", "environment", "trace_id"],
-        )
-        op.drop_constraint("uq_trace_steps_tenant_trace_step", "trace_steps", type_="unique")
-        op.create_unique_constraint(
-            "uq_trace_steps_tenant_env_trace_step",
-            "trace_steps",
-            ["tenant_id", "environment", "trace_id", "step_id"],
-        )
-        op.drop_constraint("uq_ingest_jobs_tenant_trace", "ingest_jobs", type_="unique")
-        op.create_unique_constraint(
-            "uq_ingest_jobs_tenant_env_trace",
-            "ingest_jobs",
-            ["tenant_id", "environment", "trace_id"],
-        )
+    op.drop_constraint("uq_traces_tenant_trace", "traces", type_="unique")
+    op.create_unique_constraint(
+        "uq_traces_tenant_env_trace", "traces", ["tenant_id", "environment", "trace_id"]
+    )
+    op.drop_constraint("uq_diagnoses_tenant_trace", "diagnoses", type_="unique")
+    op.create_unique_constraint(
+        "uq_diagnoses_tenant_env_trace",
+        "diagnoses",
+        ["tenant_id", "environment", "trace_id"],
+    )
+    op.drop_constraint("uq_trace_steps_tenant_trace_step", "trace_steps", type_="unique")
+    op.create_unique_constraint(
+        "uq_trace_steps_tenant_env_trace_step",
+        "trace_steps",
+        ["tenant_id", "environment", "trace_id", "step_id"],
+    )
+    op.drop_constraint("uq_ingest_jobs_tenant_trace", "ingest_jobs", type_="unique")
+    op.create_unique_constraint(
+        "uq_ingest_jobs_tenant_env_trace",
+        "ingest_jobs",
+        ["tenant_id", "environment", "trace_id"],
+    )

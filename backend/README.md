@@ -1,11 +1,12 @@
 # Backend (Python)
 
-Phase **A/B + diagnosis (v0.4)**: canonical traces, **async ingest with DB-backed durable backlog** (`ingest_jobs` table), **list traces**, **rule-based diagnosis**. PostgreSQL is the default target for staging/prod; SQLite remains useful for fast local tests.
+Phase **A/B + diagnosis (v0.4)**: canonical traces, **async ingest with DB-backed durable backlog** (`ingest_jobs` table), **list traces**, **rule-based diagnosis**. **PostgreSQL** is required for local dev, tests, and production.
 
 ## Requirements
 
 - Python **3.9+** (3.11+ recommended)
 - Dependencies from `pyproject.toml`
+- **Docker** (for `docker compose` and the local Postgres container on port **5433**), unless you point `RCA_DATABASE_URL` at another reachable Postgres and set `RCA_SKIP_DOCKER_POSTGRES=1`
 
 ## Setup
 
@@ -14,7 +15,7 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -U pip
-pip install "fastapi>=0.115" "uvicorn[standard]>=0.32" "pydantic>=2.10" "pydantic-settings>=2.6" "sqlalchemy[asyncio]>=2.0.36" "aiosqlite>=0.20" "asyncpg>=0.30" "psycopg[binary]>=3.2" "PyJWT>=2.9" "alembic>=1.14" "boto3>=1.35"
+pip install "fastapi>=0.115" "uvicorn[standard]>=0.32" "pydantic>=2.10" "pydantic-settings>=2.6" "sqlalchemy[asyncio]>=2.0.36" "asyncpg>=0.30" "psycopg[binary]>=3.2" "PyJWT>=2.9" "alembic>=1.14" "boto3>=1.35"
 pip install "httpx>=0.27" "pytest>=8.3" "pytest-asyncio>=0.24"  # dev
 ```
 
@@ -22,15 +23,7 @@ If `pip install -e .` fails (older pip), keep `PYTHONPATH=.` as below.
 
 ## Run the API
 
-```bash
-cd backend
-export PYTHONPATH=.
-export RCA_DATABASE_URL="sqlite+aiosqlite:///./data/app.db"
-mkdir -p data
-python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-If your macOS dev shell occasionally leaves a stale process bound to `8000`, use the safe launcher:
+**Recommended:** use `./run_api.sh` from `backend/`. It starts the Postgres container (`docker-compose.postgres.yml`), waits until the DB is ready, creates the `rca_test` database if missing (for pytest), runs `alembic upgrade head`, then starts uvicorn. You do not need a separate manual `docker compose up` before each session.
 
 ```bash
 cd backend
@@ -43,24 +36,20 @@ Optional overrides:
 HOST=127.0.0.1 PORT=8000 LOG_LEVEL=debug ./run_api.sh
 ```
 
-`run_api.sh` uses `--loop asyncio` by default (`LOOP_IMPL=asyncio`) for better macOS stability. You can override with `LOOP_IMPL=auto` if needed.
-It also auto-picks a bootable DB in dev:
-- If `RCA_DATABASE_URL` is unset, it uses local SQLite.
-- If `RCA_DATABASE_URL` points to Postgres but Postgres is unavailable, it falls back to SQLite.
-- Set `AUTO_DB_FALLBACK=0` to force fail-fast instead of fallback.
+- `RCA_SKIP_DOCKER_POSTGRES=1` — do not start Docker; use when `RCA_DATABASE_URL` points at a Postgres you manage (e.g. cloud or a local install not on `127.0.0.1:5433`).
+- `run_api.sh` uses `--loop asyncio` by default (`LOOP_IMPL=asyncio`) for better macOS stability. You can override with `LOOP_IMPL=auto` if needed.
 
-### Run with PostgreSQL (recommended for staging/prod)
+To run uvicorn yourself (after Postgres is up and migrated):
 
 ```bash
 cd backend
-docker compose -f docker-compose.postgres.yml up -d
 export PYTHONPATH=.
 export RCA_DATABASE_URL="postgresql+asyncpg://rca:rca@127.0.0.1:5433/rca"
 python3 -m alembic upgrade head
 python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Use `**python3 -m uvicorn**` so the same interpreter that has FastAPI/uvicorn is used. The bare `uvicorn` command only works if that interpreter’s `bin` directory is on your `PATH` (e.g. after `source .venv/bin/activate`).
+Use `python3 -m uvicorn` so the same interpreter that has FastAPI/uvicorn is used. The bare `uvicorn` command only works if that interpreter’s `bin` directory is on your `PATH` (e.g. after `source .venv/bin/activate`).
 
 ### Web UI (Vite) + CORS
 
@@ -71,7 +60,7 @@ The React app in `../frontend` runs on a different origin (e.g. `http://localhos
 
 | Variable                           | Default                             | Meaning                                                                                                                                                                                                                                                                                                                    |
 | ---------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RCA_DATABASE_URL`                 | `sqlite+aiosqlite:///./data/app.db` | Async SQLAlchemy URL. For Postgres use `postgresql+asyncpg://user:pass@host:5433/dbname`                                                                                                                                                                                                                                   |
+| `RCA_DATABASE_URL`                 | `postgresql+asyncpg://rca:rca@127.0.0.1:5433/rca` | Async SQLAlchemy URL (`postgresql+asyncpg://...`).                                                                                                                                                                                                                                   |
 | `RCA_INGEST_SYNC`                  | `0` (false)                         | If `1` / `true`, `POST /v1/traces` writes in the request and returns **201**. If false, traces are first persisted to the `ingest_jobs` backlog and API returns **202**; worker drains backlog to `traces`.                                                                                                                |
 | `RCA_INGEST_QUEUE_MAXSIZE`         | `10000`                             | Max backlog row count (`ingest_jobs`) before API returns **503**                                                                                                                                                                                                                                                           |
 | `RCA_INGEST_BATCH_MAX_SIZE`        | `100`                               | Max items accepted by `POST /v1/traces/batch`                                                                                                                                                                                                                                                                              |
@@ -87,7 +76,7 @@ The React app in `../frontend` runs on a different origin (e.g. `http://localhos
 | `RCA_JWT_ISSUER`                   | *(empty / optional)*                | Optional expected JWT `iss`.                                                                                                                                                                                                                                                                                               |
 | `RCA_JWT_AUDIENCE`                 | *(empty / optional)*                | Optional expected JWT `aud`.                                                                                                                                                                                                                                                                                               |
 | `RCA_ADMIN_TOKEN`                  | *(empty / disabled)*                | Enables admin APIs for per-tenant limits via `X-Admin-Token`.                                                                                                                                                                                                                                                              |
-| `RCA_S3_BUCKET`                    | *(empty)*                           | When set, full trace JSON is stored in this bucket under `{urlencoded_tenant_id}/{trace_id}/trace.json` (environment is **not** in the path). The `traces` row keeps metadata, `step_count`, `blob_key`, `blob_etag`, and an empty `payload` JSON. When empty, behavior is unchanged (full JSON in SQLite/Postgres).        |
+| `RCA_S3_BUCKET`                    | *(empty)*                           | When set, full trace JSON is stored in this bucket under `{urlencoded_tenant_id}/{trace_id}/trace.json` (environment is **not** in the path). The `traces` row keeps metadata, `step_count`, `blob_key`, `blob_etag`, and an empty `payload` JSON. When empty, behavior is unchanged (full JSON in Postgres).        |
 | `RCA_S3_ENDPOINT_URL`            | *(empty)*                           | S3-compatible API base URL, e.g. `http://127.0.0.1:9000` for MinIO. Empty uses default AWS endpoints.                                                                                                                                                                                                                                                                 |
 | `RCA_S3_REGION`                    | `us-east-1`                         | Region passed to boto3.                                                                                                                                                                                                                                                                                                    |
 | `RCA_S3_ACCESS_KEY_ID`             | *(empty)*                           | Optional; if empty, boto3 uses the usual AWS environment/credential chain (`AWS_ACCESS_KEY_ID`, etc.).                                                                                                                                                                                                                      |
@@ -112,6 +101,8 @@ For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace
   - `PUT /v1/admin/tenants/{tenant_id}/limits` with `{ "ingest_rate_limit_rps": int>=0, "ingest_daily_trace_quota": int>=0 }`
 
 ## Tests
+
+Tests use PostgreSQL database **`rca_test`** on the same host/port as local dev (`postgresql+asyncpg://rca:rca@127.0.0.1:5433/rca_test`). Start Postgres first (e.g. run `./run_api.sh` once, or `docker compose -f docker-compose.postgres.yml up -d` and create `rca_test` if needed). `tests/conftest.py` creates `rca_test` when it can connect to the `postgres` maintenance DB.
 
 ```bash
 cd backend
@@ -139,7 +130,6 @@ python3 -m alembic upgrade head
 
 ## Next implementation steps (see `plan.md` §19)
 
-1. **PostgreSQL** + object storage when moving off single-file SQLite for staging/prod.
+1. **Object storage** tuning and staging/prod hardening (S3 already optional).
 2. **Distributed rate-limiter backend** (Redis/Postgres counters) for multi-instance API nodes.
 3. **Python SDK**, **Web UI**, **LLM explainer** — as in `plan.md`.
-

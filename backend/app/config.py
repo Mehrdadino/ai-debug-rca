@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,8 +10,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RCA_", env_file=".env", extra="ignore")
 
-    database_url: str = "sqlite+aiosqlite:///./data/app.db"
-    """Async SQLAlchemy URL. SQLite is default for local/dev; Postgres is recommended for staging/prod."""
+    database_url: str = "postgresql+asyncpg://rca:rca@127.0.0.1:5433/rca"
+    """Async SQLAlchemy URL. Local dev matches docker-compose.postgres.yml (port 5433)."""
 
     ingest_sync: bool = False
     """If True, write traces in the request handler (201). If False, enqueue and return 202."""
@@ -76,12 +75,6 @@ class Settings(BaseSettings):
                 raise ValueError("RCA_API_KEYS must be a JSON object")
             return {str(k): str(val) for k, val in parsed.items()}
         raise TypeError("RCA_API_KEYS must be a JSON object or dict")
-
-    @property
-    def database_path(self) -> Optional[Path]:
-        if self.database_url.startswith("sqlite+aiosqlite:///./"):
-            return Path(self.database_url.removeprefix("sqlite+aiosqlite:///./"))
-        return None
 
     s3_bucket: str = ""
     """When non-empty, full trace JSON is stored here; `traces.payload` is empty and `blob_key` is set."""
