@@ -82,6 +82,11 @@ The React app in `../frontend` runs on a different origin (e.g. `http://localhos
 | `RCA_S3_ACCESS_KEY_ID`             | *(empty)*                           | Optional; if empty, boto3 uses the usual AWS environment/credential chain (`AWS_ACCESS_KEY_ID`, etc.).                                                                                                                                                                                                                      |
 | `RCA_S3_SECRET_ACCESS_KEY`         | *(empty)*                           | Optional; pairs with `RCA_S3_ACCESS_KEY_ID` when set.                                                                                                                                                                                                                                                                       |
 
+S3 runtime behavior (current):
+- Blob `put/get` uses bounded retry with exponential backoff + jitter for transient S3/network failures.
+- API logs include blob operation success/failure with `attempt` and `elapsed_ms` for debugging.
+- Lifecycle/retention policy, DB↔blob reconciliation jobs, and admin repair tooling are deferred roadmap items.
+
 
 For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace, then `GET` it (may need a short delay while worker drains backlog).
 
