@@ -637,28 +637,23 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 
 ### Near-term (product + trust)
 
-1. **S3 hardening + ops guardrails (remaining)** — lifecycle/retention rules (infra policy), DB↔blob reconciliation tooling, and admin repair path (`re-upload` / `re-link` / retry commands). **Where to put access keys (and when to avoid keys):** **§16.1.2**.
+1. **RCA differentiation first (decision): diagnosis quality + explainer before scale plumbing** — prioritize improving root-cause signal quality and user-visible explanation value before queue/backend scale migrations.
 
-### Data & scale
+### Product surface (priority now)
 
-2. **Distributed ingest queue + workers** — move background ingest from DB-backed polling to a distributed queue/consumer model (SQS / Redis Streams / Pub/Sub) for multi-instance safety, retry/DLQ semantics, and cross-region scale.
-3. **Distributed rate limits / quotas (Redis)** — use Redis as the shared backend for rate limits and daily quotas so 429 behavior stays correct across multiple API instances.
-4. **PostgreSQL scale hardening** — tenant hash partitioning and operational tuning once measured load justifies it; local/tests already run against Postgres (Docker/`rca_test`), so behavior stays aligned with prod.
+2. **Diagnosis quality upgrades (rules-first RCA)** — improve rule coverage/precision, confidence calibration, and evidence quality so each diagnosis has a clear single narrative with explicit `step_id` evidence.
+3. **LLM explainer (on-demand, bounded)** — `POST /v1/traces/{id}/explain` over structured diagnosis evidence only (no unconstrained guessing); keep outputs grounded and auditable.
+4. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
+5. **Ingest owner metadata** — add **`ingest_owner_type`** (`user` \| `service`) and optional **`ingest_owner_ref`** to the HTTP + stored trace model per **§7.7** (DB columns + list/filter in UI when ready).
+6. **Step/trace outcome semantics (defer until user signal)** — decide whether to introduce a non-binary failure model (for example **`soft_fail`** vs **`hard_fail`** at step level) and derived trace-level outcome (for example **`degraded`** when there are soft failures but no hard failures). Keep current behavior for now; revisit after real user evidence that this distinction improves triage, alert quality, or reporting.
 
-### Product surface
-
-5. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
-6. **LLM explainer (on-demand)** — `POST /v1/traces/{id}/explain` or similar; structured input only; cite `step_id`s.
-7. **Ingest owner metadata** — add **`ingest_owner_type`** (`user` \| `service`) and optional **`ingest_owner_ref`** to the HTTP + stored trace model per **§7.7** (DB columns + list/filter in UI when ready).
-8. **Step/trace outcome semantics (defer until user signal)** — decide whether to introduce a non-binary failure model (for example **`soft_fail`** vs **`hard_fail`** at step level) and derived trace-level outcome (for example **`degraded`** when there are soft failures but no hard failures). Keep current behavior for now; revisit after real user evidence that this distinction improves triage, alert quality, or reporting.
-
-#### 8.1 Decision gate (when to implement)
+#### 6.1 Decision gate (when to implement)
 
 - Confirm at least a few design-partner users explicitly need to distinguish **recoverable/expected** failures from **action-required** failures.
 - Validate the distinction changes behavior (dashboard filters, alert routing, or incident response), not just label preference.
 - Lock vocabulary before schema work (`soft_fail` / `hard_fail` / `degraded` vs alternatives like `warning` / `partial_success`) so SDK/UI/docs stay consistent.
 
-#### 8.2 Proposed implementation shape (future)
+#### 6.2 Proposed implementation shape (future)
 
 - **Phase A (low-risk):** accept optional step-level failure severity in ingest payload; keep trace status aggregation unchanged until semantics stabilize.
 - **Phase B (schema + UX):** add indexed storage/filtering for the chosen outcome model and expose it in list/query/UI.
@@ -666,14 +661,26 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 
 ### Ops & enterprise
 
-9. **Observability** — OpenTelemetry on our own API/workers.
-10. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
-11. **Webhooks / export** — after hypothesis quality is credible.
+7. **Observability** — OpenTelemetry on our own API/workers.
+8. **SSO / RBAC / audit** — Phase 4 hardening per roadmap.
+9. **Webhooks / export** — after hypothesis quality is credible.
+
+### Data & scale (post-product-signal)
+
+10. **Distributed ingest queue + workers** — move background ingest from DB-backed polling to a distributed queue/consumer model (SQS / Redis Streams / Pub/Sub) for multi-instance safety, retry/DLQ semantics, and cross-region scale.
+11. **Distributed rate limits / quotas (Redis)** — use Redis as the shared backend for rate limits and daily quotas so 429 behavior stays correct across multiple API instances.
+12. **PostgreSQL scale hardening** — tenant hash partitioning and operational tuning once measured load justifies it; local/tests already run against Postgres (Docker/`rca_test`), so behavior stays aligned with prod.
 
 ### GTM
 
-12. **Design partner brief** + **90-day TTPC** measurement loop.
-13. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
+13. **Design partner brief** + **90-day TTPC** measurement loop.
+14. **JSON Schema** artifact published for `Trace` v1; OpenAPI kept as source of truth for HTTP.
+
+### Far future (post-user-signal / ops pressure)
+
+15. **S3 lifecycle/retention policy (infra)** — configure bucket/object lifecycle and retention only when compliance/cost/scale needs are clear.
+16. **DB↔blob reconciliation tooling** — scheduled scan/repair command for orphan rows, orphan blobs, and metadata drift.
+17. **Blob admin repair path** — explicit operator tooling for `re-upload`, `re-link`, and controlled retry flows.
 
 ---
 
