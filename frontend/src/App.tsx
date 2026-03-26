@@ -280,6 +280,27 @@ function formatHypothesisId(v: string): string {
     .join(' ')
 }
 
+/** Failure rules — backend `rules_engine.RULE_WEIGHTS` (red headers). */
+const DIAGNOSIS_ERROR_RULE_IDS = new Set([
+  'trace_status_error',
+  'guardrail_block',
+  'multiple_step_errors',
+  'step_error',
+  'error_after_empty_retrieval',
+  'empty_tool_output',
+  'empty_retrieval',
+])
+
+/** Degradation / ops signals — amber headers. */
+const DIAGNOSIS_WARN_RULE_IDS = new Set(['trace_status_partial', 'high_latency_llm'])
+
+function diagnosisEvidenceRuleHeaderClass(ev: DiagnosisEvidence, failedStepIds: Set<string>): string {
+  if (DIAGNOSIS_ERROR_RULE_IDS.has(ev.rule_id)) return 'diagnosis-rule-error'
+  if (DIAGNOSIS_WARN_RULE_IDS.has(ev.rule_id)) return 'diagnosis-rule-warn'
+  if (ev.step_id != null && failedStepIds.has(ev.step_id)) return 'diagnosis-rule-error'
+  return ''
+}
+
 function computeNodeDepths(steps: TraceStep[], edges: TraceEdge[]): Map<string, number> {
   const parents = new Map<string, string[]>()
   const stepIds = steps.map((s) => s.step_id)
@@ -468,6 +489,10 @@ function App() {
 
   const traceSteps = useMemo(() => extractTraceSteps(traceDetail), [traceDetail])
   const diagnosisView = useMemo(() => extractDiagnosisView(diagnosis), [diagnosis])
+  const failedStepIds = useMemo(
+    () => new Set(traceSteps.filter((s) => Boolean(s.error)).map((s) => s.step_id)),
+    [traceSteps],
+  )
   const traceEdges = useMemo(() => extractTraceEdges(traceDetail, traceSteps), [traceDetail, traceSteps])
   const visualNodes = useMemo(() => buildVisualNodes(traceSteps, traceEdges), [traceSteps, traceEdges])
   const graphCanvas = useMemo(() => {
@@ -1676,7 +1701,7 @@ function App() {
                     {diagnosisView.evidence.slice(0, 6).map((ev, idx) => (
                       <li key={`${ev.rule_id}-${ev.step_id ?? 'trace'}-${idx}`} className="diagnosis-evidence-item">
                         <div className="diagnosis-evidence-head">
-                          <span className="mono">{ev.rule_id}</span>
+                  <span className={['mono', diagnosisEvidenceRuleHeaderClass(ev, failedStepIds)].filter(Boolean).join(' ')}>{ev.rule_id}</span>
                           {ev.step_id ? <span className="muted">step: {ev.step_id}</span> : <span className="muted">trace-level</span>}
                         </div>
                         <div className="diagnosis-evidence-message">{ev.message}</div>

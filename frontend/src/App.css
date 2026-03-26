@@ -623,6 +623,14 @@ pre {
   margin-bottom: 4px;
 }
 
+.diagnosis-rule-error {
+  color: rgba(248, 113, 113, 0.95);
+}
+
+.diagnosis-rule-warn {
+  color: rgba(251, 191, 36, 0.95);
+}
+
 .diagnosis-evidence-message {
   color: #d8e3ff;
   font-size: 0.9rem;
