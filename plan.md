@@ -646,6 +646,7 @@ Use this section when continuing work in a new session. Order is **suggested**; 
 4. **Python SDK** — batching, flush, retries, idempotency, **`trace_id` return + logging hooks** (see **§16.3**); redaction hooks; thin wrappers for common frameworks (see **§11.1**).
 5. **Ingest owner metadata** — add **`ingest_owner_type`** (`user` \| `service`) and optional **`ingest_owner_ref`** to the HTTP + stored trace model per **§7.7** (DB columns + list/filter in UI when ready).
 6. **Step/trace outcome semantics (defer until user signal)** — decide whether to introduce a non-binary failure model (for example **`soft_fail`** vs **`hard_fail`** at step level) and derived trace-level outcome (for example **`degraded`** when there are soft failures but no hard failures). Keep current behavior for now; revisit after real user evidence that this distinction improves triage, alert quality, or reporting.
+7. **Missing trace status policy (defer decision)** — decide contract for traces where top-level `status` is absent or inconsistent with step errors. Candidate options: (a) keep `status` required and reject missing values, (b) infer `status` server-side from step evidence (`error`/`partial`/`success`), or (c) accept missing and store `unknown` until post-processing. Lock this before broad SDK rollout.
 
 #### 6.1 Decision gate (when to implement)
 

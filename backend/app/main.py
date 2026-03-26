@@ -2,8 +2,9 @@ import logging
 import traceback
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.routes import admin_limits, health, traces
 from app.config import settings
@@ -55,6 +56,39 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(traces.router)
 app.include_router(admin_limits.router)
+
+
+@app.middleware("http")
+async def ingest_payload_size_guard(request: Request, call_next):
+    # Defensive cap against oversized ingest payloads (accidental or adversarial).
+    if request.method == "POST" and request.url.path in ("/v1/traces", "/v1/traces/batch"):
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > settings.ingest_max_payload_bytes:
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "detail": (
+                                f"request body too large: content-length exceeds "
+                                f"{settings.ingest_max_payload_bytes} bytes"
+                            )
+                        },
+                    )
+            except ValueError:
+                # Ignore malformed header and fall back to measured body length.
+                pass
+        body = await request.body()
+        if len(body) > settings.ingest_max_payload_bytes:
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "detail": (
+                        f"request body too large: max {settings.ingest_max_payload_bytes} bytes"
+                    )
+                },
+            )
+    return await call_next(request)
 
 
 @app.get("/")

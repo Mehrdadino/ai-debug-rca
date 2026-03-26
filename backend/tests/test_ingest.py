@@ -212,3 +212,93 @@ def test_ingest_persists_trace_steps_index(client: TestClient) -> None:
     assert row is not None and int(row[0]) == 2
     assert row[1] == "1.0"
     assert row[2] == "1.0"
+
+
+def test_ingest_rejects_too_many_steps(client: TestClient) -> None:
+    tid = uuid.uuid4()
+    steps = [
+        {
+            "step_id": f"s{i}",
+            "type": "tool_call",
+            "input": {},
+            "output": {},
+            "metadata": {},
+        }
+        for i in range(1, 502)
+    ]
+    body = {
+        "schema_version": "1.0",
+        "trace_id": str(tid),
+        "tenant_id": "org_demo",
+        "started_at": "2025-01-15T10:00:00Z",
+        "status": "success",
+        "steps": steps,
+        "edges": [],
+    }
+    h = {"X-Tenant-ID": "org_demo"}
+    r = client.post("/v1/traces", json=body, headers=h)
+    assert r.status_code == 422
+    assert "too many steps" in r.json()["detail"]
+
+
+def test_ingest_rejects_payload_too_large(client: TestClient) -> None:
+    from app.config import settings
+
+    previous = settings.ingest_max_payload_bytes
+    settings.ingest_max_payload_bytes = 600
+    try:
+        tid = uuid.uuid4()
+        body = {
+            "schema_version": "1.0",
+            "trace_id": str(tid),
+            "tenant_id": "org_demo",
+            "started_at": "2025-01-15T10:00:00Z",
+            "status": "success",
+            "steps": [
+                {
+                    "step_id": "s1",
+                    "type": "tool_call",
+                    "input": {"payload": "x" * 4000},
+                    "output": {},
+                    "metadata": {},
+                }
+            ],
+            "edges": [],
+        }
+        h = {"X-Tenant-ID": "org_demo"}
+        r = client.post("/v1/traces", json=body, headers=h)
+        assert r.status_code == 413
+        assert "too large" in r.json()["detail"]
+    finally:
+        settings.ingest_max_payload_bytes = previous
+
+
+def test_ingest_rejects_oversized_step_metadata(client: TestClient) -> None:
+    from app.config import settings
+
+    prev_metadata = settings.ingest_max_step_metadata_bytes
+    settings.ingest_max_step_metadata_bytes = 256
+    try:
+        tid = uuid.uuid4()
+        body = {
+            "schema_version": "1.0",
+            "trace_id": str(tid),
+            "tenant_id": "org_demo",
+            "started_at": "2025-01-15T10:00:00Z",
+            "status": "success",
+            "steps": [
+                {
+                    "step_id": "s1",
+                    "type": "tool_call",
+                    "input": {},
+                    "output": {},
+                    "metadata": {"blob": "x" * 2000},
+                }
+            ],
+            "edges": [],
+        }
+        r = client.post("/v1/traces", json=body, headers={"X-Tenant-ID": "org_demo"})
+        assert r.status_code == 422
+        assert "steps[0].metadata exceeds" in r.json()["detail"]
+    finally:
+        settings.ingest_max_step_metadata_bytes = prev_metadata

@@ -101,7 +101,7 @@ Uniqueness: **`(tenant_id, trace_id)`** on traces, diagnoses, and ingest_jobs; *
 
 ## Ingest data flow
 
-1. **Normalize** incoming `Trace` (defaults, validation). Each step carries `step_version` (default `1.0`) so step payload schema can evolve independently from top-level `schema_version`.
+1. **Normalize** incoming `Trace` (defaults, validation). Each step carries `step_version` (default `1.0`) so step payload schema can evolve independently from top-level `schema_version`. Ingest enforces hard guardrails: steps-per-trace cap (`RCA_INGEST_MAX_STEPS_PER_TRACE`), ingest body-size cap (`RCA_INGEST_MAX_PAYLOAD_BYTES`), and per-step field-size caps (`RCA_INGEST_MAX_STEP_ERROR_BYTES`, `RCA_INGEST_MAX_STEP_METADATA_BYTES`, `RCA_INGEST_MAX_STEP_INPUT_BYTES`, `RCA_INGEST_MAX_STEP_OUTPUT_BYTES`).
 2. **Duplicate check** against existing `traces` (and queue rules for async path).
 3. **`RCA_INGEST_SYNC=true`:** `insert_trace` in the **same request** → **201**.
 4. **`RCA_INGEST_SYNC=false` (default):** row in **`ingest_jobs`** → **202**; a **background asyncio task** (`ingest_worker`) **claims** jobs, runs **`insert_trace`**, **acks** or **retries** with backoff / max attempts.

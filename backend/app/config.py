@@ -22,6 +22,24 @@ class Settings(BaseSettings):
     ingest_batch_max_size: int = 100
     """Maximum number of traces accepted by POST /v1/traces/batch."""
 
+    ingest_max_steps_per_trace: int = 500
+    """Maximum number of steps accepted for a single trace payload."""
+
+    ingest_max_payload_bytes: int = 1_048_576
+    """Hard max request body size (bytes) for ingest endpoints (/v1/traces*)."""
+
+    ingest_max_step_error_bytes: int = 8_192
+    """Maximum UTF-8 byte length for a single step `error` field."""
+
+    ingest_max_step_metadata_bytes: int = 32_768
+    """Maximum serialized JSON size (bytes) for a single step `metadata` object."""
+
+    ingest_max_step_input_bytes: int = 65_536
+    """Maximum serialized JSON size (bytes) for a single step `input` object."""
+
+    ingest_max_step_output_bytes: int = 131_072
+    """Maximum serialized JSON size (bytes) for a single step `output` object."""
+
     ingest_claim_timeout_seconds: int = 60
     """Claim lease timeout for processing jobs (stale claims become reclaimable)."""
 

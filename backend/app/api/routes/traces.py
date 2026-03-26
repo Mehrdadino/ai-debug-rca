@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Optional
@@ -180,6 +181,54 @@ def _row_to_summary(row: TraceRecord) -> TraceSummary:
     )
 
 
+def _json_size_bytes(payload: dict[str, Any]) -> int:
+    return len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+
+def _validate_step_field_sizes(trace: Trace) -> None:
+    for idx, step in enumerate(trace.steps):
+        if step.error is not None:
+            err_size = len(step.error.encode("utf-8"))
+            if err_size > settings.ingest_max_step_error_bytes:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"steps[{idx}].error exceeds {settings.ingest_max_step_error_bytes} bytes "
+                        f"(got {err_size})"
+                    ),
+                )
+
+        metadata_size = _json_size_bytes(step.metadata)
+        if metadata_size > settings.ingest_max_step_metadata_bytes:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"steps[{idx}].metadata exceeds {settings.ingest_max_step_metadata_bytes} bytes "
+                    f"(got {metadata_size})"
+                ),
+            )
+
+        input_size = _json_size_bytes(step.input)
+        if input_size > settings.ingest_max_step_input_bytes:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"steps[{idx}].input exceeds {settings.ingest_max_step_input_bytes} bytes "
+                    f"(got {input_size})"
+                ),
+            )
+
+        output_size = _json_size_bytes(step.output)
+        if output_size > settings.ingest_max_step_output_bytes:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"steps[{idx}].output exceeds {settings.ingest_max_step_output_bytes} bytes "
+                    f"(got {output_size})"
+                ),
+            )
+
+
 async def _ingest_one_trace(
     trace: Trace,
     tenant_id: str,
@@ -190,6 +239,15 @@ async def _ingest_one_trace(
             status_code=400,
             detail="body.tenant_id must match authenticated tenant",
         )
+    if len(trace.steps) > settings.ingest_max_steps_per_trace:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"trace has too many steps: {len(trace.steps)} "
+                f"(max {settings.ingest_max_steps_per_trace})"
+            ),
+        )
+    _validate_step_field_sizes(trace)
     normalized = normalize_trace(trace)
     if await trace_exists(session, tenant_id, trace.trace_id):
         raise HTTPException(
