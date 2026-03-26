@@ -57,6 +57,7 @@ def test_ingest_and_get_trace(client: TestClient) -> None:
     data = g.json()
     assert data["tenant_id"] == "org_demo"
     assert len(data["steps"]) == 2
+    assert data["steps"][0]["step_version"] == "1.0"
     assert data["steps"][1]["metadata"]["model"] == "gpt-4"
 
 
@@ -205,7 +206,9 @@ def test_ingest_persists_trace_steps_index(client: TestClient) -> None:
     sync_url = f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
     with psycopg.connect(sync_url) as conn:
         row = conn.execute(
-            "SELECT COUNT(*) FROM trace_steps WHERE trace_id = %s AND tenant_id = %s AND environment = %s",
+            "SELECT COUNT(*), MIN(step_version), MAX(step_version) FROM trace_steps WHERE trace_id = %s AND tenant_id = %s AND environment = %s",
             (str(tid), "org_demo", "prod"),
         ).fetchone()
     assert row is not None and int(row[0]) == 2
+    assert row[1] == "1.0"
+    assert row[2] == "1.0"

@@ -75,6 +75,7 @@ async def insert_trace(session: AsyncSession, trace: Trace) -> TraceRecord:
                 tenant_id=trace.tenant_id,
                 environment=trace.environment.value,
                 step_id=step.step_id,
+                step_version=step.step_version,
                 step_type=step.type,
                 parent_step_id=step.parent_step_id,
                 has_error=step.error is not None,

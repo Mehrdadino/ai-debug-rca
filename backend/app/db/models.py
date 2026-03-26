@@ -87,6 +87,7 @@ class TraceStepRecord(Base):
     tenant_id: Mapped[str] = mapped_column(String(256), index=True)
     environment: Mapped[str] = mapped_column(String(32), index=True, insert_default="prod")
     step_id: Mapped[str] = mapped_column(String(256))
+    step_version: Mapped[str] = mapped_column(String(16), insert_default="1.0")
     step_type: Mapped[str] = mapped_column(String(64), index=True)
     parent_step_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     has_error: Mapped[bool] = mapped_column(Boolean, index=True, insert_default=False)

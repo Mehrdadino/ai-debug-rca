@@ -18,6 +18,7 @@ type TraceSummary = {
 type StepSummary = {
   trace_id: string
   step_id: string
+  step_version?: string
   step_type: string
   tenant_id: string
   environment: TraceEnvironment
@@ -49,6 +50,7 @@ type ApiError = { status: number; detail: string }
 type ConnectionState = 'unknown' | 'connected' | 'disconnected'
 type TraceStep = {
   step_id: string
+  step_version?: string
   type: string
   parent_step_id: string | null
   error: string | null
@@ -64,7 +66,7 @@ type VisualNode = {
 }
 type GraphTooltipPos = { x: number; y: number }
 const GRAPH_TOOLTIP_WIDTH = 220
-const GRAPH_TOOLTIP_HEIGHT = 92
+const GRAPH_TOOLTIP_HEIGHT = 108
 const GRAPH_TOOLTIP_MAX_RADIUS = 230
 type PersistedUiState = {
   baseUrl?: string
@@ -232,6 +234,7 @@ function extractTraceSteps(traceDetail: Record<string, unknown> | null): TraceSt
     if (!stepId) continue
     out.push({
       step_id: stepId,
+      step_version: typeof rec.step_version === 'string' && rec.step_version.trim() ? rec.step_version : '1.0',
       type: String(rec.type ?? 'unknown'),
       parent_step_id: rec.parent_step_id ? String(rec.parent_step_id) : null,
       error: rec.error ? String(rec.error) : null,
@@ -556,13 +559,15 @@ function App() {
       setTooltipStepId('')
       return
     }
+    // Never auto-open tooltip on trace changes; only user action should open it.
+    setTooltipPos(null)
+    setTooltipStepId('')
     const pending = pendingGraphFocusRef.current
     if (pending && traceSteps.some((s) => s.step_id === pending)) {
       setSelectedStepId(pending)
       pendingGraphFocusRef.current = null
       requestAnimationFrame(() => {
         centerGraphOnStep(pending)
-        openTooltipForStep(pending)
       })
       return
     }
@@ -671,6 +676,11 @@ function App() {
   function placeTooltipNearStep(stepId: string): GraphTooltipPos {
     const node = visualNodeById.get(stepId)
     if (!node) return { x: 0, y: 0 }
+    const overlapsOwn = (p: GraphTooltipPos): boolean =>
+      rectsOverlap(
+        { x: p.x, y: p.y, w: GRAPH_TOOLTIP_WIDTH, h: GRAPH_TOOLTIP_HEIGHT },
+        { x: node.x, y: node.y, w: 80, h: 48 },
+      )
     const candidates: GraphTooltipPos[] = [
       { x: node.x + 94, y: node.y - 8 },
       { x: node.x - GRAPH_TOOLTIP_WIDTH - 14, y: node.y - 8 },
@@ -692,6 +702,13 @@ function App() {
       if (s < bestScore) {
         best = p
         bestScore = s
+      }
+    }
+    if (overlapsOwn(best)) {
+      // As a fallback, prefer non-overlap even if it exceeds preferred radius.
+      for (const c of candidates) {
+        const p = clampTooltipPos(c)
+        if (!overlapsOwn(p)) return p
       }
     }
     return best
@@ -857,7 +874,6 @@ function App() {
       if (node) {
         nextPos = clampTooltipToRadius(nextPos, node)
         nextPos = clampTooltipPos(nextPos)
-        nextPos = enforceNoOwnStepOverlap(nextPos, node)
       }
       setTooltipPos(nextPos)
       return
@@ -1672,7 +1688,10 @@ function App() {
                           <text x={tooltipPos.x + 10} y={tooltipPos.y + 68} className="graph-tooltip-line">
                             {selectedStep.error ? `error: ${selectedStep.error}` : 'status: ok'}
                           </text>
-                          <text x={tooltipPos.x + 10} y={tooltipPos.y + 84} className="graph-tooltip-hint">drag to move</text>
+                          <text x={tooltipPos.x + 10} y={tooltipPos.y + 84} className="graph-tooltip-line">
+                            step_version: {selectedStep.step_version ?? '1.0'}
+                          </text>
+                          <text x={tooltipPos.x + 10} y={tooltipPos.y + 100} className="graph-tooltip-hint">drag to move</text>
                         </g>
                       )}
                       </g>
@@ -1710,6 +1729,7 @@ function App() {
                             <div className="timeline-top">
                               <strong>{step.step_id}</strong>
                               <span>{step.type}</span>
+                              <span>v{step.step_version ?? '1.0'}</span>
                               <span>{formatLatencyMs(step.metadata)}</span>
                             </div>
                             {step.error && <div className="timeline-error">{step.error}</div>}
@@ -1838,6 +1858,7 @@ function App() {
                     <tr>
                       <th>trace_id</th>
                       <th>step_id</th>
+                      <th>step_version</th>
                       <th>type</th>
                       <th>env</th>
                       <th>started</th>
@@ -1861,6 +1882,7 @@ function App() {
                       >
                         <td className="mono">{row.trace_id}</td>
                         <td className="mono">{row.step_id}</td>
+                        <td className="mono">{row.step_version ?? '1.0'}</td>
                         <td>{row.step_type}</td>
                         <td>{row.environment}</td>
                         <td>{row.trace_started_at}</td>

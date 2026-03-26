@@ -39,6 +39,7 @@ class CorrelationIds(BaseModel):
 
 
 class Step(BaseModel):
+    step_version: str = Field(default="1.0", pattern=r"^\d+\.\d+$")
     step_id: str = Field(..., min_length=1, max_length=256)
     type: str = Field(..., min_length=1, max_length=64)
     parent_step_id: Optional[str] = None

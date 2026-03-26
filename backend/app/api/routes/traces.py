@@ -133,6 +133,7 @@ class TraceListResponse(BaseModel):
 class StepSummary(BaseModel):
     trace_id: UUID
     step_id: str
+    step_version: str = Field(description="Per-step schema version for input/output/metadata shape.")
     step_type: str
     tenant_id: str
     environment: TraceEnvironment
@@ -151,6 +152,7 @@ def _row_to_step_summary(row: TraceStepRecord) -> StepSummary:
     return StepSummary(
         trace_id=UUID(row.trace_id),
         step_id=row.step_id,
+        step_version=row.step_version,
         step_type=row.step_type,
         tenant_id=row.tenant_id,
         environment=TraceEnvironment(row.environment),

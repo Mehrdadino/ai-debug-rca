@@ -117,3 +117,4 @@ def test_steps_failures_alias_is_back_compatible(client: TestClient) -> None:
     data = r.json()
     assert len(data["items"]) == 1
     assert data["items"][0]["error"] == "timeout"
+    assert data["items"][0]["step_version"] == "1.0"
