@@ -398,10 +398,12 @@ function App() {
   const [selectedStepId, setSelectedStepId] = useState('')
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [graphViewportSize, setGraphViewportSize] = useState({ width: 0, height: 0 })
   const [lastPointer, setLastPointer] = useState<{ x: number; y: number } | null>(null)
   const [tooltipPos, setTooltipPos] = useState<GraphTooltipPos | null>(null)
   const [tooltipStepId, setTooltipStepId] = useState('')
   const graphViewportRef = useRef<HTMLDivElement | null>(null)
+  const graphSvgRef = useRef<SVGSVGElement | null>(null)
   const timelineRef = useRef<HTMLOListElement | null>(null)
   /** When opening a trace from the Steps tab, select this step after load (consumed in traceSteps effect). */
   const pendingGraphFocusRef = useRef<string | null>(null)
@@ -469,10 +471,10 @@ function App() {
   const traceEdges = useMemo(() => extractTraceEdges(traceDetail, traceSteps), [traceDetail, traceSteps])
   const visualNodes = useMemo(() => buildVisualNodes(traceSteps, traceEdges), [traceSteps, traceEdges])
   const graphCanvas = useMemo(() => {
-    const width = Math.max(680, ...visualNodes.map((n) => n.x + 160))
-    const height = Math.max(240, ...visualNodes.map((n) => n.y + 110))
+    const width = Math.max(680, graphViewportSize.width, ...visualNodes.map((n) => n.x + 160))
+    const height = Math.max(240, graphViewportSize.height, ...visualNodes.map((n) => n.y + 110))
     return { width, height }
-  }, [visualNodes])
+  }, [visualNodes, graphViewportSize.width, graphViewportSize.height])
   const graphBounds = useMemo(() => {
     if (!visualNodes.length) return { minX: 0, minY: 0, width: 680, height: 220 }
     const minX = Math.min(...visualNodes.map((n) => n.x))
@@ -667,7 +669,15 @@ function App() {
   useEffect(() => {
     const viewport = graphViewportRef.current
     if (!viewport) return
-    const observer = new ResizeObserver(() => centerGraphToFit())
+    const syncViewportSize = () => {
+      setGraphViewportSize({
+        width: Math.max(0, Math.floor(viewport.clientWidth)),
+        height: Math.max(0, Math.floor(viewport.clientHeight)),
+      })
+      centerGraphToFit()
+    }
+    syncViewportSize()
+    const observer = new ResizeObserver(syncViewportSize)
     observer.observe(viewport)
     return () => observer.disconnect()
     // Keep graph centered when viewport size changes.
@@ -679,12 +689,54 @@ function App() {
     panRef.current = pan
   }, [zoom, pan])
 
+  /**
+   * Pointer in SVG user space (viewBox coords). Required because width/height can differ from
+   * viewBox (min graph height 360), so CSS pixels are not 1:1 with pan/zoom units.
+   */
+  function pointerInGraphSvg(e: { clientX: number; clientY: number }): { x: number; y: number } | null {
+    const svg = graphSvgRef.current
+    if (!svg) return null
+    const ctm = svg.getScreenCTM()
+    if (!ctm) return null
+    const pt = svg.createSVGPoint()
+    pt.x = e.clientX
+    pt.y = e.clientY
+    const loc = pt.matrixTransform(ctm.inverse())
+    return { x: loc.x, y: loc.y }
+  }
+
+  /** Center of the graph viewport wrapper, in SVG user space (matches pan units). */
+  function viewportCenterInGraphSvg(): { x: number; y: number } | null {
+    const svg = graphSvgRef.current
+    const viewport = graphViewportRef.current
+    if (!svg || !viewport) return null
+    const ctm = svg.getScreenCTM()
+    if (!ctm) return null
+    const r = viewport.getBoundingClientRect()
+    const pt = svg.createSVGPoint()
+    pt.x = r.left + r.width / 2
+    pt.y = r.top + r.height / 2
+    const loc = pt.matrixTransform(ctm.inverse())
+    return { x: loc.x, y: loc.y }
+  }
+
   function zoomTo(targetZoom: number, anchor?: { x: number; y: number }): void {
     const viewport = graphViewportRef.current
     if (!viewport) return
-    const rect = viewport.getBoundingClientRect()
-    const vx = anchor?.x ?? rect.width / 2
-    const vy = anchor?.y ?? rect.height / 2
+    const svg = graphSvgRef.current
+    let vx: number
+    let vy: number
+    if (anchor) {
+      vx = anchor.x
+      vy = anchor.y
+    } else if (svg) {
+      vx = graphCanvas.width / 2
+      vy = graphCanvas.height / 2
+    } else {
+      const rect = viewport.getBoundingClientRect()
+      vx = rect.width / 2
+      vy = rect.height / 2
+    }
     const graphX = (vx - panRef.current.x) / zoomRef.current
     const graphY = (vy - panRef.current.y) / zoomRef.current
     const nextZoom = Math.max(0.45, Math.min(2.4, targetZoom))
@@ -696,17 +748,16 @@ function App() {
   }
 
   function centerGraphOnStep(stepId: string): void {
-    const viewport = graphViewportRef.current
     const node = visualNodeById.get(stepId)
-    if (!viewport || !node) return
-    const vw = Math.max(240, viewport.clientWidth)
-    const vh = Math.max(200, viewport.clientHeight)
+    if (!node) return
+    const center = viewportCenterInGraphSvg()
+    if (!center) return
     const nodeCx = node.x + 40
     const nodeCy = node.y + 24
     const currentZoom = zoomRef.current
     setPan({
-      x: vw / 2 - nodeCx * currentZoom,
-      y: vh / 2 - nodeCy * currentZoom,
+      x: center.x - nodeCx * currentZoom,
+      y: center.y - nodeCy * currentZoom,
     })
   }
 
@@ -719,8 +770,9 @@ function App() {
     e.stopPropagation()
     const factor = Math.exp(-e.deltaY * 0.0015)
     const targetZoom = zoomRef.current * factor
-    const rect = e.currentTarget.getBoundingClientRect()
-    zoomTo(targetZoom, { x: e.clientX - rect.left, y: e.clientY - rect.top })
+    const p = pointerInGraphSvg(e)
+    if (!p) return
+    zoomTo(targetZoom, p)
   }
 
   function onGraphMouseDown(e: MouseEvent<HTMLDivElement>): void {
@@ -734,8 +786,8 @@ function App() {
   }
 
   function onGraphMouseMove(e: MouseEvent<HTMLDivElement>): void {
-    const rect = e.currentTarget.getBoundingClientRect()
-    setLastPointer({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+    const p = pointerInGraphSvg(e)
+    if (p) setLastPointer(p)
     if (tooltipDragRef.current.active) {
       const dx = (e.clientX - tooltipDragRef.current.startX) / zoomRef.current
       const dy = (e.clientY - tooltipDragRef.current.startY) / zoomRef.current
@@ -1461,6 +1513,7 @@ function App() {
                       onMouseLeave={onGraphMouseUp}
                     >
                     <svg
+                      ref={graphSvgRef}
                       className="trace-graph"
                       width={graphCanvas.width}
                       height={Math.max(graphCanvas.height, 360)}
