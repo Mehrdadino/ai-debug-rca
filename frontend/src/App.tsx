@@ -305,6 +305,11 @@ function formatHypothesisId(v: string): string {
     .join(' ')
 }
 
+function evidenceScopeLabel(ev: DiagnosisEvidence): string {
+  if (ev.step_id) return `Step ${ev.step_id}`
+  return 'Whole trace'
+}
+
 /** Failure rules — backend `rules_engine.RULE_WEIGHTS` (red headers). */
 const DIAGNOSIS_ERROR_RULE_IDS = new Set([
   'trace_status_error',
@@ -1475,7 +1480,8 @@ function App() {
       )}
 
       {tab === 'traces' && (
-        <section className={`panel grid-two traces-layout ${graphFocusMode ? 'focus-graph' : ''}`}>
+        <section className={`panel traces-page traces-layout ${graphFocusMode ? 'focus-graph' : ''}`}>
+          <div className="traces-page-top">
           {!graphFocusMode && (
           <article className="glass card trace-list-card">
             <h3>Trace List</h3>
@@ -1526,7 +1532,7 @@ function App() {
             </ul>
           </article>
           )}
-          <article className="glass card">
+          <article className="glass card trace-detail-main">
             <div className="trace-detail-header">
               <h3>Trace Detail Query</h3>
             </div>
@@ -1722,22 +1728,32 @@ function App() {
               </div>
               )}
             </div>
-            <h3 className="detail-section-heading">Diagnosis</h3>
+          </article>
+          </div>          
+          <div className="glass card traces-diagnosis-section">
+            <h2 className="traces-diagnosis-title">Diagnosis</h2>
+            <p className="diagnosis-intro muted">
+              Rule-based readout of this trace: each line below is a deterministic check (not an LLM guess). Use the graph and timeline above to see where each step ran.
+            </p>
             {diagnosisView ? (
-              <div className="diagnosis-overview">
+              <div className="diagnosis-overview diagnosis-overview-wide">
                 <div className="diagnosis-title-row">
                   <div>
+                    <p className="diagnosis-field-label">Primary explanation</p>
                     <h4>{formatHypothesisId(diagnosisView.primary_hypothesis)}</h4>
-                    <p className="muted diagnosis-rule-id mono">{diagnosisView.primary_hypothesis}</p>
+                    <p className="muted diagnosis-rule-id mono">Internal id: {diagnosisView.primary_hypothesis}</p>
                   </div>
-                  <div className="diagnosis-confidence-pill">
+                  <div
+                    className="diagnosis-confidence-pill"
+                    title="Score from rule weights (0–1). Higher means a stronger match to the primary explanation."
+                  >
                     Confidence {diagnosisView.confidence === null ? 'n/a' : diagnosisView.confidence.toFixed(3)}
                   </div>
                 </div>
                 <p className="diagnosis-summary-text">{diagnosisView.summary || 'No deterministic summary available yet.'}</p>
                 {diagnosisView.secondary_hypotheses.length > 0 && (
                   <div className="diagnosis-secondary">
-                    <p className="muted">Secondary hypotheses</p>
+                    <p className="diagnosis-field-label">Also considered</p>
                     <div className="diagnosis-tags">
                       {diagnosisView.secondary_hypotheses.map((h) => (
                         <span key={h} className="diagnosis-tag mono">{h}</span>
@@ -1746,41 +1762,49 @@ function App() {
                   </div>
                 )}
                 {diagnosisView.evidence.length > 0 ? (
-                  <ol className="diagnosis-evidence-list">
-                    {diagnosisView.evidence.slice(0, 6).map((ev, idx) => {
-                      const severity = diagnosisEvidenceSeverity(ev, failedStepIds)
-                      const ruleHeaderClass =
-                        severity === 'error' ? 'diagnosis-rule-error' : severity === 'warn' ? 'diagnosis-rule-warn' : ''
-                      return (
-                        <li key={`${ev.rule_id}-${ev.step_id ?? 'trace'}-${idx}`} className="diagnosis-evidence-item">
-                          <div className="diagnosis-evidence-head">
-                            <div className="diagnosis-evidence-rule-wrap">
-                              <span className={['mono', ruleHeaderClass].filter(Boolean).join(' ')} title="Deterministic diagnosis rule id">{ev.rule_id}</span>
-                              {severity !== 'neutral' && (
-                                <span className={severity === 'error' ? 'diagnosis-severity-pill error' : 'diagnosis-severity-pill warn'}>
-                                  {severity === 'error' ? 'Failure' : 'Warning'}
-                                </span>
-                              )}
+                  <>
+                    <p className="diagnosis-field-label">Evidence checks</p>
+                    <ol className="diagnosis-evidence-list diagnosis-evidence-list-scroll">
+                      {diagnosisView.evidence.slice(0, 20).map((ev, idx) => {
+                        const severity = diagnosisEvidenceSeverity(ev, failedStepIds)
+                        const ruleHeaderClass =
+                          severity === 'error' ? 'diagnosis-rule-error' : severity === 'warn' ? 'diagnosis-rule-warn' : ''
+                        return (
+                          <li key={`${ev.rule_id}-${ev.step_id ?? 'trace'}-${idx}`} className="diagnosis-evidence-item">
+                            <div className="diagnosis-evidence-head">
+                              <div className="diagnosis-evidence-rule-wrap">
+                                <span className={['mono', ruleHeaderClass].filter(Boolean).join(' ')} title="Deterministic diagnosis rule id">{ev.rule_id}</span>
+                                {severity !== 'neutral' && (
+                                  <span className={severity === 'error' ? 'diagnosis-severity-pill error' : 'diagnosis-severity-pill warn'}>
+                                    {severity === 'error' ? 'Failure' : 'Warning'}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="muted diagnosis-evidence-scope">Scope: {evidenceScopeLabel(ev)}</span>
                             </div>
-                            {ev.step_id ? <span className="muted">step: {ev.step_id}</span> : <span className="muted">trace-level</span>}
-                          </div>
-                          <div className="diagnosis-evidence-message">{ev.message}</div>
-                        </li>
-                      )
-                    })}
-                  </ol>
+                            <div className="diagnosis-evidence-message">{ev.message}</div>
+                          </li>
+                        )
+                      })}
+                    </ol>
+                  </>
                 ) : (
                   <p className="muted">No evidence items for this diagnosis.</p>
                 )}
               </div>
             ) : (
-              <p className="muted">No diagnosis loaded yet.</p>
+              <p className="muted">No diagnosis loaded yet. Fetch a trace above, or ingest a trace first.</p>
             )}
-            <h3 className="detail-section-heading">Trace JSON</h3>
-            <pre>{traceDetail ? JSON.stringify(traceDetail, null, 2) : 'No trace loaded yet.'}</pre>
-            <h3 className="detail-section-heading">Diagnosis JSON</h3>
-            <pre>{diagnosis ? JSON.stringify(diagnosis, null, 2) : 'No diagnosis loaded yet.'}</pre>
-          </article>
+          </div>
+          <details className="glass card trace-raw-json-details">
+            <summary className="trace-raw-json-summary">Raw trace & diagnosis JSON (for debugging)</summary>
+            <div className="trace-raw-json-body">
+              <h3 className="detail-section-heading">Trace JSON</h3>
+              <pre>{traceDetail ? JSON.stringify(traceDetail, null, 2) : 'No trace loaded yet.'}</pre>
+              <h3 className="detail-section-heading">Diagnosis JSON</h3>
+              <pre>{diagnosis ? JSON.stringify(diagnosis, null, 2) : 'No diagnosis loaded yet.'}</pre>
+            </div>
+          </details>
         </section>
       )}
 
