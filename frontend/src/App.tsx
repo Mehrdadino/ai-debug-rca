@@ -152,6 +152,31 @@ function formatRequestError(e: unknown): string {
   return String(e)
 }
 
+function detailToMessage(detail: unknown, status: number): string {
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        const rec = asRecord(item)
+        if (!rec) return null
+        const msg = typeof rec.msg === 'string' ? rec.msg.trim() : ''
+        const loc = Array.isArray(rec.loc) ? rec.loc.map((x) => String(x)).join('.') : ''
+        if (!msg) return null
+        return loc ? `${loc}: ${msg}` : msg
+      })
+      .filter((v): v is string => Boolean(v))
+    if (messages.length > 0) return messages.join(' | ')
+    return `Request failed (${status})`
+  }
+  if (detail && typeof detail === 'object') {
+    const rec = detail as Record<string, unknown>
+    if (typeof rec.message === 'string' && rec.message.trim()) return rec.message
+    if (typeof rec.error === 'string' && rec.error.trim()) return rec.error
+    if (typeof rec.detail === 'string' && rec.detail.trim()) return rec.detail
+  }
+  return `Request failed (${status})`
+}
+
 function toIso(d: Date): string {
   return d.toISOString().replace(/\.\d{3}Z$/, 'Z')
 }
@@ -185,7 +210,7 @@ async function parseResponse<T>(res: Response): Promise<T> {
   const raw = await res.text()
   const payload = raw ? JSON.parse(raw) : {}
   if (!res.ok) {
-    const detail = (payload as { detail?: string }).detail ?? `Request failed (${res.status})`
+    const detail = detailToMessage((payload as { detail?: unknown }).detail, res.status)
     throw { status: res.status, detail } as ApiError
   }
   return payload as T
@@ -294,11 +319,13 @@ const DIAGNOSIS_ERROR_RULE_IDS = new Set([
 /** Degradation / ops signals — amber headers. */
 const DIAGNOSIS_WARN_RULE_IDS = new Set(['trace_status_partial', 'high_latency_llm'])
 
-function diagnosisEvidenceRuleHeaderClass(ev: DiagnosisEvidence, failedStepIds: Set<string>): string {
-  if (DIAGNOSIS_ERROR_RULE_IDS.has(ev.rule_id)) return 'diagnosis-rule-error'
-  if (DIAGNOSIS_WARN_RULE_IDS.has(ev.rule_id)) return 'diagnosis-rule-warn'
-  if (ev.step_id != null && failedStepIds.has(ev.step_id)) return 'diagnosis-rule-error'
-  return ''
+type DiagnosisEvidenceSeverity = 'error' | 'warn' | 'neutral'
+
+function diagnosisEvidenceSeverity(ev: DiagnosisEvidence, failedStepIds: Set<string>): DiagnosisEvidenceSeverity {
+  if (DIAGNOSIS_ERROR_RULE_IDS.has(ev.rule_id)) return 'error'
+  if (DIAGNOSIS_WARN_RULE_IDS.has(ev.rule_id)) return 'warn'
+  if (ev.step_id != null && failedStepIds.has(ev.step_id)) return 'error'
+  return 'neutral'
 }
 
 function computeNodeDepths(steps: TraceStep[], edges: TraceEdge[]): Map<string, number> {
@@ -390,6 +417,7 @@ function App() {
   const [connectionState, setConnectionState] = useState<ConnectionState>('unknown')
   const [lastConnectedAt, setLastConnectedAt] = useState<string>('')
   const toastTimerRef = useRef<number | null>(null)
+  const errorTimerRef = useRef<number | null>(null)
 
   const [traceList, setTraceList] = useState<TraceSummary[]>([])
   const [traceOffset, setTraceOffset] = useState(0)
@@ -878,7 +906,22 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!error) return
+    if (errorTimerRef.current !== null) {
+      window.clearTimeout(errorTimerRef.current)
+    }
+    errorTimerRef.current = window.setTimeout(() => {
+      setError('')
+      errorTimerRef.current = null
+    }, 4800)
+  }, [error])
+
+  useEffect(() => {
     return () => {
+      if (errorTimerRef.current !== null) {
+        window.clearTimeout(errorTimerRef.current)
+        errorTimerRef.current = null
+      }
       if (stepRowNavTimerRef.current !== null) {
         window.clearTimeout(stepRowNavTimerRef.current)
         stepRowNavTimerRef.current = null
@@ -1051,7 +1094,13 @@ function App() {
       }
     } catch (e) {
       pendingGraphFocusRef.current = null
-      setError(formatRequestError(e))
+      const msg = formatRequestError(e)
+      const normalized = msg.toLowerCase()
+      if (normalized.includes('path.trace_id') || normalized.includes('valid uuid') || normalized.includes('trace not found')) {
+        setError('Trace ID not found')
+      } else {
+        setError(msg)
+      }
       setTraceDetail(null)
       setDiagnosis(null)
     }
@@ -1698,15 +1747,27 @@ function App() {
                 )}
                 {diagnosisView.evidence.length > 0 ? (
                   <ol className="diagnosis-evidence-list">
-                    {diagnosisView.evidence.slice(0, 6).map((ev, idx) => (
-                      <li key={`${ev.rule_id}-${ev.step_id ?? 'trace'}-${idx}`} className="diagnosis-evidence-item">
-                        <div className="diagnosis-evidence-head">
-                  <span className={['mono', diagnosisEvidenceRuleHeaderClass(ev, failedStepIds)].filter(Boolean).join(' ')}>{ev.rule_id}</span>
-                          {ev.step_id ? <span className="muted">step: {ev.step_id}</span> : <span className="muted">trace-level</span>}
-                        </div>
-                        <div className="diagnosis-evidence-message">{ev.message}</div>
-                      </li>
-                    ))}
+                    {diagnosisView.evidence.slice(0, 6).map((ev, idx) => {
+                      const severity = diagnosisEvidenceSeverity(ev, failedStepIds)
+                      const ruleHeaderClass =
+                        severity === 'error' ? 'diagnosis-rule-error' : severity === 'warn' ? 'diagnosis-rule-warn' : ''
+                      return (
+                        <li key={`${ev.rule_id}-${ev.step_id ?? 'trace'}-${idx}`} className="diagnosis-evidence-item">
+                          <div className="diagnosis-evidence-head">
+                            <div className="diagnosis-evidence-rule-wrap">
+                              <span className={['mono', ruleHeaderClass].filter(Boolean).join(' ')} title="Deterministic diagnosis rule id">{ev.rule_id}</span>
+                              {severity !== 'neutral' && (
+                                <span className={severity === 'error' ? 'diagnosis-severity-pill error' : 'diagnosis-severity-pill warn'}>
+                                  {severity === 'error' ? 'Failure' : 'Warning'}
+                                </span>
+                              )}
+                            </div>
+                            {ev.step_id ? <span className="muted">step: {ev.step_id}</span> : <span className="muted">trace-level</span>}
+                          </div>
+                          <div className="diagnosis-evidence-message">{ev.message}</div>
+                        </li>
+                      )
+                    })}
                   </ol>
                 ) : (
                   <p className="muted">No evidence items for this diagnosis.</p>

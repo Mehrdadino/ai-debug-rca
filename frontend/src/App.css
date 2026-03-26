@@ -631,6 +631,33 @@ pre {
   color: rgba(251, 191, 36, 0.95);
 }
 
+.diagnosis-evidence-rule-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diagnosis-severity-pill {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  border: 1px solid transparent;
+}
+
+.diagnosis-severity-pill.error {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: rgba(254, 202, 202, 0.98);
+  background: rgba(127, 29, 29, 0.45);
+}
+
+.diagnosis-severity-pill.warn {
+  border-color: rgba(251, 191, 36, 0.45);
+  color: rgba(254, 240, 138, 0.98);
+  background: rgba(113, 63, 18, 0.42);
+}
+
 .diagnosis-evidence-message {
   color: #d8e3ff;
   font-size: 0.9rem;
