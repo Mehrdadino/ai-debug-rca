@@ -1401,7 +1401,7 @@ function App() {
     <div className="app-shell">
       <header className="topbar glass">
         <div className="topbar-left">
-          <p className="eyebrow">AI Debug RCA</p>
+          <p className="eyebrow">ai_debug_rca</p>
           <h1>Observability Console</h1>
         </div>
         <div className="topbar-right">

@@ -1,6 +1,6 @@
 # Web console
 
-React + TypeScript UI for the ai-debug-rca API. It is a browser client: it calls the public HTTP API and does not embed server credentials.
+React + TypeScript UI for the ai_debug_rca API. It is a browser client: it calls the public HTTP API and does not embed server credentials.
 
 ## Run
 

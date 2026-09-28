@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ai-debug-rca-backend"
+name = "ai_debug_rca-backend"
 version = "0.1.0"
 description = "AI debugging RCA platform — backend API"
 readme = "README.md"

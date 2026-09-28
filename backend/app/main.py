@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ai-debug-rca",
+    title="ai_debug_rca",
     description="AI debugging & root-cause analysis — durable async ingest, list, diagnosis",
     version="0.4.0",
     lifespan=lifespan,
@@ -93,4 +93,4 @@ async def ingest_payload_size_guard(request: Request, call_next):
 
 @app.get("/")
 async def root() -> dict[str, str]:
-    return {"service": "ai-debug-rca", "docs": "/docs"}
+    return {"service": "ai_debug_rca", "docs": "/docs"}

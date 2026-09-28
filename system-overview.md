@@ -1,6 +1,6 @@
 # System overview
 
-Concise map of the **ai-debug-rca** stack: API surface, persistence, async ingest, optional object storage, and the web UI. For product strategy and roadmap, see `plan.md`.
+Concise map of the **ai_debug_rca** stack: API surface, persistence, async ingest, optional object storage, and the web UI. For product strategy and roadmap, see `plan.md`.
 
 ## Architecture (high level)
 

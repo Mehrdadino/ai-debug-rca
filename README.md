@@ -1,4 +1,4 @@
-# ai-debug-rca
+# ai_debug_rca
 
 Open-source API and web console for debugging AI application traces and producing a rule-based root-cause diagnosis.
 

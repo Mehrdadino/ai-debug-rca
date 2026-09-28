@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve ai-debug-rca.
+Thanks for helping improve ai_debug_rca.
 
 ## Development setup
 
