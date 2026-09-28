@@ -15,11 +15,12 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -U pip
-pip install "fastapi>=0.115" "uvicorn[standard]>=0.32" "pydantic>=2.10" "pydantic-settings>=2.6" "sqlalchemy[asyncio]>=2.0.36" "asyncpg>=0.30" "psycopg[binary]>=3.2" "PyJWT>=2.9" "alembic>=1.14" "boto3>=1.35"
-pip install "httpx>=0.27" "pytest>=8.3" "pytest-asyncio>=0.24"  # dev
+pip install -e ".[dev]"
 ```
 
-If `pip install -e .` fails (older pip), keep `PYTHONPATH=.` as below.
+Copy `../.env.example` to `.env` in this directory only if you need to override defaults. The process reads `.env` from the working directory (`backend/`). Do not commit `.env`.
+
+If `pip install -e ".[dev]"` fails on an older pip, install the packages listed in `pyproject.toml` directly and keep `PYTHONPATH=.` when you start the API.
 
 ## Run the API
 
@@ -75,7 +76,7 @@ The React app in `../frontend` runs on a different origin (e.g. `http://localhos
 | `RCA_INGEST_MAX_ATTEMPTS`          | `5`                                 | Max background attempts before moving job to `dead` state                                                                                                                                                                                                                                                                  |
 | `RCA_INGEST_RATE_LIMIT_RPS`        | `0` (disabled)                      | Per-tenant ingest request limit (requests/second). When exceeded, API returns **429** with `Retry-After`.                                                                                                                                                                                                                  |
 | `RCA_INGEST_DAILY_TRACE_QUOTA`     | `0` (disabled)                      | Per-tenant ingest quota (trace count/day UTC). Applied to single and batch ingest. Exceeding returns **429** with `Retry-After`.                                                                                                                                                                                           |
-| `RCA_API_KEYS`                     | *(empty)*                           | JSON object mapping API key → `tenant_id`, e.g. `{"sk_live_xxx":"org_123"}`. When set, clients must send `**Authorization: Bearer <key>`** or `**X-API-Key**`; `**X-Tenant-ID` is not used for auth** (body `tenant_id` must still match the resolved tenant). When empty, local/dev behavior uses `**X-Tenant-ID`** only. |
+| `RCA_API_KEYS`                     | *(empty)*                           | JSON object mapping API key → `tenant_id`, e.g. `{"sk_example":"org_123"}`. When set, clients must send `Authorization: Bearer <key>` or `X-API-Key`. `X-Tenant-ID` is not used for auth (body `tenant_id` must still match the resolved tenant). When empty, local/dev behavior uses `X-Tenant-ID` only. |
 | `RCA_JWT_SECRET`                   | *(empty / disabled)*                | Enables bearer JWT auth when set. API resolves tenant from JWT claim (`RCA_JWT_TENANT_CLAIM`, default `tenant_id`).                                                                                                                                                                                                        |
 | `RCA_JWT_ALGORITHM`                | `HS256`                             | JWT verification algorithm (HMAC path for now).                                                                                                                                                                                                                                                                            |
 | `RCA_JWT_TENANT_CLAIM`             | `tenant_id`                         | Claim name containing tenant binding.                                                                                                                                                                                                                                                                                      |
@@ -102,7 +103,7 @@ For local async testing, use `export RCA_INGEST_SYNC=0` (or unset), post a trace
   - **201** when all items are synchronously accepted, **202** when all are queued, **207** for mixed outcomes  
   - SDK-friendly item fields: `status`, `http_status`, optional `error_code`, optional `detail`
 - Rate/quota failures return **429** with `Retry-After` and a retry hint in `detail`.
-- List: `GET /v1/traces?limit=&offset=&status=&environment=&started_at_from=&started_at_to=` — optional filters; time bounds are **inclusive** on `**started_at*`* (run time), ISO-8601  
+- List: `GET /v1/traces?limit=&offset=&status=&environment=&started_at_from=&started_at_to=` — optional filters; time bounds are **inclusive** on `started_at` (run time), ISO-8601
 - Steps query: `GET /v1/traces/steps?step_type=&has_error=&days=&environment=&limit=&offset=` — fast step-index query (supports failures/success/all; default `days=7`)
 - Backward-compatible alias: `GET /v1/traces/steps/failures?...` (equivalent to `has_error=true`)
 - Fetch: `GET /v1/traces/{trace_id}?environment=prod|staging|dev|critical` (defaults to `prod`)  
@@ -144,4 +145,4 @@ python3 -m alembic upgrade head
 
 1. **Object storage** tuning and staging/prod hardening (S3 already optional).
 2. **Distributed rate-limiter backend** (Redis/Postgres counters) for multi-instance API nodes.
-3. **Python SDK**, **Web UI**, **LLM explainer** — as in `plan.md`.
+3. **Python SDK** and **LLM explainer** — as in `plan.md`. The web console already lives in `frontend/`.

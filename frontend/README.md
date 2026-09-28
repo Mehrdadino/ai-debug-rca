@@ -1,73 +1,33 @@
-# React + TypeScript + Vite
+# Web console
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + TypeScript UI for the ai-debug-rca API. It is a browser client: it calls the public HTTP API and does not embed server credentials.
 
-Currently, two official plugins are available:
+## Run
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+The API should already be up (`../backend/run_api.sh`, default `http://127.0.0.1:8000`).
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Vite prints a local URL (usually `http://localhost:5173`). In **Settings**, set Base URL to the API. Leave API key and JWT empty for local dev and set a tenant id; the client sends that as `X-Tenant-ID`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run lint
+npm run build
 ```
+
+## Tabs
+
+| Tab | What it does |
+|-----|----------------|
+| Settings | Base URL, tenant, optional API key / JWT / admin token, health check |
+| Ingest | Edit and send `POST /v1/traces` and `POST /v1/traces/batch` |
+| Traces | List, filters, detail, execution graph, timeline, diagnosis, shareable query params |
+| Steps | Step index (`GET /v1/traces/steps`); a row opens that trace |
+| Admin | Per-tenant limits; needs `RCA_ADMIN_TOKEN` on the API and the admin token in Settings |
+| Test Data | Generate sample traces through the API |
+
+The API allows browser requests from `localhost` and `127.0.0.1` on any port. Restart the API if the UI cannot reach it after a CORS-related change.

@@ -7,6 +7,7 @@ name = "ai-debug-rca-backend"
 version = "0.1.0"
 description = "AI debugging RCA platform — backend API"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.9"
 dependencies = [
   "fastapi>=0.115",

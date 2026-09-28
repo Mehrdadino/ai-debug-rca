@@ -12,3 +12,20 @@ data/
 .ruff_cache/
 dist/
 *.egg-info/
+
+# Local editor and OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Frontend
+node_modules/
+coverage/
+
+# Secrets and credential material (never commit)
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
